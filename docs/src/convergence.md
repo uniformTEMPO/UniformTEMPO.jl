@@ -1,0 +1,3 @@
+# Convergence guidelines
+
+Under construction.
