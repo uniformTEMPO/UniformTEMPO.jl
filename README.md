@@ -3,7 +3,7 @@ Welcome to _UniformTEMPO.jl_, a Julia implementation of the open quantum system 
 
 ## Documentation
 
-The documentation is available at `./docs`. Run `./docs/make.jl` to generate it and host it locally.
+The documentation is available [here](https://uniformtempo.github.io/UniformTEMPO.jl/).
 
 ## Installation
 
