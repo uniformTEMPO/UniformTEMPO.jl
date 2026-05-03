@@ -15,7 +15,7 @@ s_op = [0 1; 1 0]
 
 ```julia
 using UniformTEMPO
-pt = uniTEMPO(σ_x, 0.1, bcf, 1e-8)
+pt = uniTEMPO(s_op, 0.1, bcf, 1e-8)
 ```
 
 (3) use it to compute dynamics

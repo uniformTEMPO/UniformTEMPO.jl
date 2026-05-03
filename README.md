@@ -28,7 +28,7 @@ The effect of the bath on the system is characterized by the bath correlation fu
 $$ \mathrm{bcf}(t)=\sum_\lambda g_\lambda^2 \big(\coth(\beta\omega_\lambda/2)\cos(\omega_\lambda t)-\mathrm{i}\sin(\omega_\lambda t)\big)
 $$
 
-We also provide an implementation of uniform TEMPO for general linear coupling models based on Ref. [[Link, arXiv:2603.23432 (2026)]](https://arxiv.org/abs/2603.23432).
+We also provide an implementation of uniTEMPO for general linear coupling models based on Ref. [[Link, arXiv:2603.23432 (2026)](https://arxiv.org/abs/2603.23432)].
 
 Here is a simple usage example for the spin boson model.
 
@@ -36,14 +36,14 @@ Here is a simple usage example for the spin boson model.
 
 ```julia
 bcf(t) = 0.1 * (5 / (1 + im * 5 * t))^2
-s_op = [0 1; 1 0]
+S = [0 1; 1 0]
 ```
 
 (2) compute a process tensor MPO using uniTEMPO, 
 
 ```julia
 using UniformTEMPO
-pt = uniTEMPO(σ_x, 0.1, bcf, 1e-8)
+pt = uniTEMPO(S, 0.1, bcf, 1e-8)
 ```
 
 (3) use it to compute dynamics
