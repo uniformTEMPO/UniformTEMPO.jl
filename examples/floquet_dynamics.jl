@@ -6,7 +6,7 @@ using OrdinaryDiffEq
 σz = [1 0; 0 -1]
 σx = [0 1; 1 0]
 ϵ = ω = 1 # driving amplitude and frequency
-h_s(t) = σx + ϵ * cos(t * ω) * σx
+h_s(t) = σx + ϵ * cos(t * ω) * σx 
 
 T = 2π / ω # driving period
 δt = T / 60 # commensurate time-step
