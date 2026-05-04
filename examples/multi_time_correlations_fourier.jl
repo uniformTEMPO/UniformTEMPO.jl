@@ -1,4 +1,5 @@
-# multi-time correlations in Fourier space for 2D electronic spectra. Fourier and pathways convention as in  [https://arxiv.org/abs/2603.04970]
+# Multi-time correlations in Fourier space applied to a 2D electronic spectra example. 
+# Fourier and pathways convention as in  [Garbellini et al. (2026), https://arxiv.org/abs/2603.04970]
 
 using UniformTEMPO
 using LinearAlgebra
