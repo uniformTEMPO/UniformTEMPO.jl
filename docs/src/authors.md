@@ -2,7 +2,7 @@
 
 ## List of authors 
 
-[Valentin Link](https://scholar.google.com/citations?user=yeRCTtEAAAAJ), Konrad Mickiewicz, Matteo Garbellini
+[Valentin Link](https://scholar.google.com/citations?user=yeRCTtEAAAAJ), [Konrad Mickiewicz](https://scholar.google.com/citations?user=plIP9bAAAAAJ), Matteo Garbellini
 
 This code is based on algorithms introduced in the papers below.
 
