@@ -3,10 +3,10 @@ using LinearAlgebra
 using JLD2
 
 function convergence(   value_func::Function, S::AbstractMatrix{<:Number}, 
-                        trotter::AbstractArray{<:Number}, bcf::Function, accuracy::AbstractArray{<:Number}; max_rank::Int=100_000,
+                        trotter::AbstractArray{<:Number}, bcf::Function, accuracy::AbstractArray{<:Number};
                         path::String = pwd(),
                         checkpoint_file::String="checkpoint.jld2",
-                        output_file::String="convergence_data.jld2",
+                        output_file::String="convergence_data.jld2", kwargs...
                     )
 
 
@@ -22,7 +22,7 @@ function convergence(   value_func::Function, S::AbstractMatrix{<:Number},
 
     # extract return type of value_func
     # benefit: passes all possible warning/errors to the base uniTEMPO function
-    pt = uniTEMPO(S, trotter[1], bcf, accuracy[1])
+    pt = uniTEMPO(S, trotter[1], bcf, accuracy[1]; kwargs...)
     T = typeof(value_func(pt))
 
     # allocate bond_dimension, values, and last index arrays
@@ -40,7 +40,7 @@ function convergence(   value_func::Function, S::AbstractMatrix{<:Number},
     for j in eachindex(trotter)
         for k in eachindex(accuracy)
             try
-                MyPT = uniTEMPO(S, trotter[j], bcf, accuracy[k]; max_rank = max_rank)
+                MyPT = uniTEMPO(S, trotter[j], bcf, accuracy[k]; kwargs...)
                 bond_dimensions[j, k]= bond_dim(MyPT)
                 values[j, k] = value_func(MyPT)
                 indices[j] = k
