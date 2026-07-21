@@ -292,8 +292,9 @@ Compute the process tensor for a Gaussian bath using the uniTEMPO algorithm. Ret
 - `max_rank` is a hard limit on the bond dimension. The algorithm will throw an error if this limit is reached. 
 - `low_rank_svd` if set to true, compute the low-rank subspace first and then perform SVD on the low-rank subspace only. This can be beneficial for simulations with large system dimensions. It is recommended to set `truncation` to `:abs` when using this option to avoid issues with determining the rank based on the relative cutoff when the full singular value spectrum is not computed.
 - `svd_filtering_tol` if set to a nonzero value, use an iTEBD scheme with SVD filtering on the physical indices. The extra filtering is performed with the given tolerance. 
+- `verbose` if set to false suppresses the std output of the process tensor computation.
 """
-function uniTEMPO(s::AbstractMatrix{<:Number}, delta_t::Real, bcf::Union{Function,Vector}, tol::Real; auto_nc::Bool=true, n_c::Int=100_000, truncation::Symbol=:rel, cap_rank::Int=100_000, low_rank_svd::Bool=false, svd_filtering_tol::Real=0, ftype::DataType=Float64, max_rank::Int=100_000)
+function uniTEMPO(s::AbstractMatrix{<:Number}, delta_t::Real, bcf::Union{Function,Vector}, tol::Real; auto_nc::Bool=true, n_c::Int=100_000, truncation::Symbol=:rel, cap_rank::Int=100_000, low_rank_svd::Bool=false, svd_filtering_tol::Real=0, ftype::DataType=Float64, max_rank::Int=100_000, verbose::Bool = true)
     # this is the version for a single coupling operator, the version for multiple coupling operators is below. 
     # TODO: Merge it with multiple coupling version. Currently multi coupling is still slower due to some extra overhead (builing i_tens).
     @assert s' == s "`s` must be hermitian"
@@ -326,7 +327,7 @@ function uniTEMPO(s::AbstractMatrix{<:Number}, delta_t::Real, bcf::Union{Functio
             n_c = find_nc(t -> bcf(t) * ones(1, 1), tol, delta_t, [s_vals], [s_diff_red]; n_c=n_c, truncation=truncation, ftype=ftype)
         end
     end
-    @show n_c
+    verbose && @show n_c
 
     if typeof(bcf) <: Vector
         η = Complex{ftype}.(bcf[1:n_c])
@@ -344,7 +345,7 @@ function uniTEMPO(s::AbstractMatrix{<:Number}, delta_t::Real, bcf::Union{Functio
 
     optimized_contraction = optimize_code(contraction, uniformsize(contraction, length(s_sum)), GreedyMethod())
 
-    p = ProgressUnknown(desc="building the influence matrix", spinner=true)
+    p = ProgressUnknown(desc="building the influence matrix", spinner=true, enabled=verbose)
 
     for k in 0:(n_c-2)
         i_tens = exp.(-real(η[n_c-k]) * (s_diff * s_diff_red') - im * imag(η[n_c-k]) * (s_sum * s_diff_red'))
@@ -395,7 +396,7 @@ function uniTEMPO(s::AbstractMatrix{<:Number}, delta_t::Real, bcf::Union{Functio
 
     return UniformPTMPO(size(s, 1), delta_t, q, v_r, transpose(v_l))
 end
-function uniTEMPO(s_ops::AbstractVector, delta_t::Real, bcf::Union{Function,Array}, tol::Real; auto_nc::Bool=true, n_c::Int=100_000, truncation::Symbol=:rel, cap_rank::Int=100_000, ftype::DataType=Float64, low_rank_svd::Bool=false, svd_filtering_tol::Real=0, max_rank::Int=100_000)
+function uniTEMPO(s_ops::AbstractVector, delta_t::Real, bcf::Union{Function,Array}, tol::Real; auto_nc::Bool=true, n_c::Int=100_000, truncation::Symbol=:rel, cap_rank::Int=100_000, ftype::DataType=Float64, low_rank_svd::Bool=false, svd_filtering_tol::Real=0, max_rank::Int=100_000, verbose::Bool = true)
     s_vals = []
     basis = []
     filter = []
@@ -440,7 +441,7 @@ function uniTEMPO(s_ops::AbstractVector, delta_t::Real, bcf::Union{Function,Arra
     if auto_nc
         n_c = find_nc(bcf, tol, delta_t, s_vals, s_diff_red; n_c=n_c, truncation=truncation, ftype=ftype)
     end
-    @show n_c
+    verbose && @show n_c
 
     if typeof(bcf) <: Array
         η = Complex{ftype}.((bcf[1:n_c, :, :]))
@@ -470,7 +471,7 @@ function uniTEMPO(s_ops::AbstractVector, delta_t::Real, bcf::Union{Function,Arra
 
     optimized_contraction = optimize_code(contraction, uniformsize(contraction, ν_dim), GreedyMethod())
 
-    p = ProgressUnknown(desc="building the influence matrix", spinner=true)
+    p = ProgressUnknown(desc="building the influence matrix", spinner=true, enabled = verbose)
     ind = CartesianIndices(Tuple(s_dims .^ 2))
     ind_diff = CartesianIndices(Tuple(length.(s_diff_red)))
 
@@ -573,7 +574,7 @@ function uniTEMPO(s_ops::AbstractVector, delta_t::Real, bcf::Union{Function,Arra
     end
 
     if (size(f0, 1) == 1)
-        println("bond dimension 1 (trivial influence functional)")
+        verbose && println("bond dimension 1 (trivial influence functional)")
         return UniformPTMPO(size(s_ops[1], 1), delta_t_orig)
     end
 
