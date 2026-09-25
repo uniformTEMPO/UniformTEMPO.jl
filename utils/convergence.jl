@@ -190,8 +190,8 @@ function convergence(value_func::Function, s::Union{AbstractMatrix{<:Number}, Ve
 
     # allocate results array
     bond_dimensions = Array{Union{Int64, Nothing}}(nothing, length(trotter), length(accuracy))
-    values          = Array{Union{T, Nothing}}(nothing, length(trotter), length(accuracy))
-    indices     = Array{Int}(undef, length(trotter))
+    values = Array{Union{T, Nothing}}(nothing, length(trotter), length(accuracy))
+    indices = Array{Union{Int,Nothing}}(nothing, length(trotter))
 
     # define convergence run metadata
     run_metadata = merge(Dict{String,Any}(
