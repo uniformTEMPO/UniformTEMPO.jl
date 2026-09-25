@@ -56,7 +56,7 @@ function _run_convergence!(value_func, S, trotter, bcf, kwargs, accuracy,
                         ])
 
                 #saving process tensor 
-                !isnothing(pt_path) && jldsave(joinpath(pt_path, "pt_$(j)_$(k).jld2"); MyPT, trotter = trotter[j], accuracy = accuracy[j], bdim = bond_dimensions[j, k])
+                !isnothing(pt_path) && jldsave(joinpath(pt_path, "pt_$(j)_$(k).jld2"); MyPT, trotter = trotter[j], accuracy = accuracy[k], bdim = bond_dimensions[j, k])
 
             catch 
                 # uncheck for explicit warning
