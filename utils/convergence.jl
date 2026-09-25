@@ -175,7 +175,7 @@ checkpointing throughout and writing final results to disk. Returns
 - `kwargs...`: forwarded to `uniTEMPO`.
 """
 
-function convergence(value_func::Function, S::AbstractMatrix{<:Number}, trotter::AbstractArray{<:Number}, bcf::Function,accuracy::AbstractArray{<:Number};
+function convergence(value_func::Function, s::Union{AbstractMatrix{<:Number}, Vector}, trotter::AbstractArray{<:Number}, bcf::Union{Function, Array}, accuracy::AbstractArray{<:Number};
                     path::String = pwd(), filename::String = "convergence", pt_save::Bool = false, 
                     label::String= "", metadata::Dict{String,Any} = Dict{String,Any}(), 
                     kwargs...)
@@ -185,7 +185,7 @@ function convergence(value_func::Function, S::AbstractMatrix{<:Number}, trotter:
 
 
     # probe return type (forward the same kwargs for consistency).
-    pt = uniTEMPO(S, trotter[1], bcf, accuracy[1]; kwargs...)
+    pt = uniTEMPO(s, trotter[1], bcf, accuracy[1]; kwargs...)
     T  = typeof(value_func(pt))
 
     # allocate results array
@@ -207,7 +207,7 @@ function convergence(value_func::Function, S::AbstractMatrix{<:Number}, trotter:
     checkpoint = _make_checkpoint(checkpoint_path, bond_dimensions, values, trotter, accuracy, indices, run_metadata)
 
     # convergence run
-    _run_convergence!(value_func, S, trotter, bcf, kwargs, accuracy, bond_dimensions, values, indices, checkpoint, pt_path)
+    _run_convergence!(value_func, s, trotter, bcf, kwargs, accuracy, bond_dimensions, values, indices, checkpoint, pt_path)
 
     # save convergence run
     jldsave(output_path; bond_dimensions, values, trotter, accuracy, indices, metadata = run_metadata)
@@ -217,7 +217,7 @@ function convergence(value_func::Function, S::AbstractMatrix{<:Number}, trotter:
 end                    
 
 """
-    resume_from_checkpoint(value_func, S, bcf;
+    resume_from_checkpoint(value_func, s, bcf;
                            path = pwd(), filename = "convergence",
                            label = "", pt_save = false)
 
@@ -225,18 +225,13 @@ Resume an interrupted `convergence` run from its checkpoint file, continuing fro
 the saved position and finalizing the results. Returns `(bond_dimensions, values, indices)`.
 
 # Arguments
-- `value_func`, `S`, `bcf`: re-supplied since they are not stored in the checkpoint.
+- `value_func`, `s`, `bcf`: re-supplied since they are not stored in the checkpoint.
 - `path`, `filename`: locate the checkpoint (keyword).
 - `label`: optional label; warns if it differs from the stored one (keyword).
 - `pt_save`: whether process tensors are being saved (keyword).
 """
 
-function resume_from_checkpoint(value_func::Function, S::AbstractMatrix{<:Number},
-                                bcf::Function;
-                                path::String = pwd(),
-                                filename::String = "convergence",
-                                label::String = "",
-                                pt_save::Bool = false)
+function resume_from_checkpoint(value_func::Function, s::Union{AbstractMatrix{<:Number}, Vector},bcf::Union{Function, Array}; path::String = pwd(), filename::String = "convergence", label::String = "",pt_save::Bool = false)
 
     output_path, checkpoint_path, pt_path = _resolve_paths(path, filename, pt_save; resume = true)
     @assert isfile(checkpoint_path) "No checkpoint found at: '$checkpoint_path'"
@@ -280,7 +275,7 @@ function resume_from_checkpoint(value_func::Function, S::AbstractMatrix{<:Number
         @info "Checkpoint already complete; writing final output."
     else
         @info "Resume position" start_trotter = start_j start_accuracy = start_k
-        _run_convergence!(value_func, S, trotter, bcf, kwargs, accuracy,
+        _run_convergence!(value_func, s, trotter, bcf, kwargs, accuracy,
                           bond_dimensions, values, indices,
                           checkpoint, pt_path; start_j = start_j, start_k = start_k)
     end
