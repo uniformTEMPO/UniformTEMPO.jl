@@ -87,7 +87,7 @@ artifacts unless `resume` is `true`.
 function _resolve_paths(path, filename, pt_save; resume::Bool = false)
     # assert that `path` points to a directory
     path = abspath(expanduser(path))
-    @assert isdir(path) "Provided path is not a directory: $path"
+    isdir(path) || throw(ArgumentError("Provided path is not a directory: $path"))
 
     # strip a trailing ".jld2" from filename if present
     endswith(filename, ".jld2") && (filename = filename[1:end-length(".jld2")])
@@ -103,9 +103,9 @@ function _resolve_paths(path, filename, pt_save; resume::Bool = false)
     ckpt_path   = joinpath(target_dir, filename * ".ckpt.jld2")
     isfile(output_path) && error("Convergence results with filename \"$(filename).jld2\" " *"already exist in $target_dir.")
 
-    if (isfile(ckpt_path) && resume == false)
+    if isfile(ckpt_path) && !resume 
         error("A checkpoint file \"$(filename).ckpt.jld2\" already exists in " *
-            "$target_dir. Use `resume_from_checkpoint()` to continue from it.")
+            "$target_dir. Use `resume_from_checkpoint()`.")
     end
 
     if pt_save
@@ -148,7 +148,7 @@ function _make_checkpoint(checkpoint_path, bond_dimensions, values,
 end
 
 """
-    convergence(value_func, S, trotter, bcf, accuracy;
+    convergence(value_func, s, trotter, bcf, accuracy;
                 path = pwd(), filename = "convergence", pt_save = false,
                 label = "", metadata = Dict{String,Any}(), kwargs...)
 
@@ -192,6 +192,7 @@ function convergence(value_func::Function, s::Union{AbstractMatrix{<:Number}, Ve
             "n_trotter"  => length(trotter),
             "n_accuracy" => length(accuracy),
             "kwargs"  => NamedTuple(kwargs),
+            "pt_save" => pt_save,
         ), metadata)
 
     # make first checkpoint
@@ -239,7 +240,10 @@ function resume_from_checkpoint(value_func::Function, s::Union{AbstractMatrix{<:
     broke           = get(state, "broke", false)
     saved_meta      = get(state, "metadata", Dict{String,Any}())
     saved_label     = get(saved_meta, "label", "")
-    kwargs          = saved_meta["kwargs"]
+    kwargs          = get(saved_meta, "kwargs", NamedTuple())
+    stored_pt       = get(saved_meta, "pt_save", false)
+
+    stored_pt == pt_save || error("pt_save = $pt_save disagrees with checkpoint ($stored_pt)")
 
     @info "Resuming convergence run" quantity=saved_label value_type=get(saved_meta, "value_type", "unknown") created=get(saved_meta, "created", "unknown")
 
