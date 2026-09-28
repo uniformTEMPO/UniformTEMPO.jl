@@ -4,6 +4,7 @@ using Dates
 using ProgressMeter
 using Printf
 
+
 """
     _run_convergence!(value_func, S, trotter, bcf, pt_kwargs, accuracy,
                       bond_dimensions, values, indices, checkpoint, pt_path;
@@ -27,14 +28,19 @@ function _run_convergence!(value_func, S, trotter, bcf, kwargs, accuracy,
                            bond_dimensions, values, indices,
                            checkpoint, pt_path; start_j::Int = 1, start_k::Int = 1)
 
-    total = length(trotter) * length(accuracy)
-    n_j   = length(trotter)     # max index for the trotter loop
-    n_k   = length(accuracy)    # max index for the accuracy loop
+    n_j, n_k = length(trotter), length(accuracy)
+    total = n_j * n_k 
+    completed = 0   
+
+    report(j, k, bdim) = update!(prog, completed; showvalues = [
+        (:trotter_step,   @sprintf("%.1e (%d/%d)", trotter[j], j, n_j)),
+        (:accuracy,       @sprintf("%.1e (%d/%d)", accuracy[k], k, n_k)),
+        (:bond_dimension, bdim),
+        (:elapsed_s,      round(time() - prog.tinit; digits = 2)),
+    ])
 
     prog = Progress(total; dt = 0.5, desc = "Convergence run: ",
                     barglyphs = BarGlyphs("[=> ]"), color = :cyan)
-
-    completed = 0
 
     for j in start_j:lastindex(trotter)
         k0 = (j == start_j) ? start_k : firstindex(accuracy)
@@ -44,33 +50,18 @@ function _run_convergence!(value_func, S, trotter, bcf, kwargs, accuracy,
                 bond_dimensions[j, k] = bond_dim(MyPT)
                 values[j, k]          = value_func(MyPT)
                 indices[j]            = k
-                checkpoint(j, k; broke = false)
-
-                completed += 1
-                update!(prog, completed;
-                        showvalues = [
-                            (:trotter_step,   @sprintf("%.1e (%d/%d)", trotter[j], j, n_j)),
-                            (:accuracy,       @sprintf("%.1e (%d/%d)", accuracy[k], k, n_k)),
-                            (:bond_dimension, bond_dimensions[j, k]),
-                            (:elapsed_s,      round(time() - prog.tinit; digits = 2)),
-                        ])
 
                 #saving process tensor 
                 !isnothing(pt_path) && jldsave(joinpath(pt_path, "pt_$(j)_$(k).jld2"); MyPT, trotter = trotter[j], accuracy = accuracy[k], bdim = bond_dimensions[j, k])
 
-            catch 
-                # uncheck for explicit warning
-                # @warn "Maximum bond dimension reached. Skipping to next trotter step"
+                checkpoint(j, k; broke = false)
+                report(j, k, bond_dimensions[j, k])
+                completed += 1
+               
+            catch #the current catch implemention is not very sound. TO DO: differentiate between errors/exceptions
                 checkpoint(j, k; broke = true)
-                completed += lastindex(accuracy) - k + 1
-                
-                update!(prog, completed;
-                        showvalues = [
-                            (:trotter_step,   @sprintf("%.1e (%d/%d)", trotter[j], j, n_j)),
-                            (:accuracy,       @sprintf("%.1e (%d/%d)", accuracy[k], k, n_k)),
-                            (:bond_dimension, "max_bond dimension reached"),
-                            (:elapsed_s,      round(time() - prog.tinit; digits = 2)),
-                        ])
+                report(j, k, "max bond dimension reached")
+                completed += length(k:lastindex(accuracy))
                 break
             end
         end
