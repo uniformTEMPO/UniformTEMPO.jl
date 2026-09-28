@@ -4,6 +4,11 @@ using Dates
 using ProgressMeter
 using Printf
 
+function _atomic_save(dest; kwargs...)
+    tmp = dest * ".tmp"
+    jldsave(tmp; kwargs...)
+    mv(tmp, dest; force = true)
+end
 
 """
     _run_convergence!(value_func, S, trotter, bcf, pt_kwargs, accuracy,
@@ -136,15 +141,8 @@ state to `checkpoint_path` (via a temp file + `mv`).
 - `run_metadata`: metadata dictionary to embed.
 """
 
-function _make_checkpoint(checkpoint_path, bond_dimensions, values,
-                          trotter, accuracy, indices, run_metadata)
-    return (j, k; broke::Bool = false) -> begin
-        tmpfile = checkpoint_path * ".tmp"
-        jldsave(tmpfile; bond_dimensions, values, trotter, accuracy,
-                trotter_index = j, accuracy_index = k, indices,
-                broke, metadata = run_metadata)
-        mv(tmpfile, checkpoint_path; force = true)
-    end
+function _make_checkpoint(checkpoint_path, bond_dimensions, values, trotter, accuracy, indices, run_metadata)
+    return (j, k; broke::Bool = false) -> _atomic_save(checkpoint_path; bond_dimensions, values, trotter, accuracy, trotter_index = j, accuracy_index = k, indices, broke, metadata = run_metadata)
 end
 
 """
@@ -202,7 +200,7 @@ function convergence(value_func::Function, s::Union{AbstractMatrix{<:Number}, Ve
     _run_convergence!(value_func, s, trotter, bcf, kwargs, accuracy, bond_dimensions, values, indices, checkpoint, pt_path)
 
     # save convergence run
-    jldsave(output_path; bond_dimensions, values, trotter, accuracy, indices, metadata = run_metadata)
+    _atomic_save(output_path; bond_dimensions, values, trotter, accuracy, indices, metadata = run_metadata)
     isfile(checkpoint_path) && rm(checkpoint_path)
                 
     return bond_dimensions, values, indices
@@ -275,7 +273,8 @@ function resume_from_checkpoint(value_func::Function, s::Union{AbstractMatrix{<:
                           checkpoint, pt_path; start_j = start_j, start_k = start_k)
     end
 
-    jldsave(output_path; bond_dimensions, values, trotter, accuracy, indices,
+    
+    _atomic_save(output_path; bond_dimensions, values, trotter, accuracy, indices,
             metadata = saved_meta)
     isfile(checkpoint_path) && rm(checkpoint_path)
 
