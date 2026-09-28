@@ -94,7 +94,7 @@ function _resolve_paths(path, filename, pt_save; resume::Bool = false)
 
     # assert that path/filename is a directory; if not, create it
     target_dir = joinpath(path, filename)
-    !isdir(target_dir) && mkdir(target_dir)
+    !isdir(target_dir) && mkpath(target_dir)
 
 
     # if path/filename already contains "filename.jld2" or
@@ -113,7 +113,7 @@ function _resolve_paths(path, filename, pt_save; resume::Bool = false)
         if isdir(pt_path)
             resume == false && error("A process-tensor directory \"pt_$(filename)\" already " *"exists in $target_dir. Use `resume_from_checkpoint()` " *"to continue from it.")
         else
-            mkdir(pt_path)
+            mkpath(pt_path)
         end
     else
         pt_path = nothing
