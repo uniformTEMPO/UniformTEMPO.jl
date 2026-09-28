@@ -180,9 +180,9 @@ function convergence(value_func::Function, s::Union{AbstractMatrix{<:Number}, Ve
     T  = typeof(value_func(pt))
 
     # allocate results array
-    bond_dimensions = Array{Union{Int64, Nothing}}(nothing, length(trotter), length(accuracy))
-    values = Array{Union{T, Nothing}}(nothing, length(trotter), length(accuracy))
-    indices = Array{Union{Int,Nothing}}(nothing, length(trotter))
+    bond_dimensions = Array{Union{Int64, Missing}}(missing, length(trotter), length(accuracy))
+    values = Array{Union{T, Missing}}(missing, length(trotter), length(accuracy))
+    indices = Array{Union{Int, Missing}}(missing, length(trotter))
 
     # define convergence run metadata
     run_metadata = merge(Dict{String,Any}(
