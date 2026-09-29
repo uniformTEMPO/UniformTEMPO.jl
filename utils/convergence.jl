@@ -169,18 +169,25 @@ function convergence(value_func::Function, s::Union{AbstractMatrix{<:Number}, Ve
                     label::String= "", metadata::Dict{String,Any} = Dict{String,Any}(), 
                     kwargs...)
 
+    
+   
+    # --- Probe cell (1,1): validates inputs, infers T, 
+    pt_first = uniTEMPO(s, first(trotter), bcf, first(accuracy); kwargs...)
+    v_first  = value_func(pt_first)
+    T        = typeof(v_first)
+    bdim_first = bond_dim(pt_first)
+
     # resolve paths
     output_path, checkpoint_path, pt_path = _resolve_paths(path, filename, pt_save)
-
-
-    # probe return type (forward the same kwargs for consistency).
-    pt = uniTEMPO(s, trotter[1], bcf, accuracy[1]; kwargs...)
-    T  = typeof(value_func(pt))
 
     # allocate results array
     bond_dimensions = Array{Union{Int64, Missing}}(missing, length(trotter), length(accuracy))
     values = Array{Union{T, Missing}}(missing, length(trotter), length(accuracy))
     indices = Array{Union{Int, Missing}}(missing, length(trotter))
+
+    # save first run 
+    bond_dimensions[1] = bdim_first
+    values[1] = v_first
 
     # define convergence run metadata
     run_metadata = merge(Dict{String,Any}(
@@ -196,8 +203,11 @@ function convergence(value_func::Function, s::Union{AbstractMatrix{<:Number}, Ve
     # make first checkpoint
     checkpoint = _make_checkpoint(checkpoint_path, bond_dimensions, values, trotter, accuracy, indices, run_metadata)
 
+    # checkpoint save of first run
+    checkpoint(firstindex(trotter), firstindex(accuracy); broke = false)
+
     # convergence run
-    _run_convergence!(value_func, s, trotter, bcf, kwargs, accuracy, bond_dimensions, values, indices, checkpoint, pt_path)
+    _run_convergence!(value_func, s, trotter, bcf, kwargs, accuracy, bond_dimensions, values, indices, checkpoint, pt_path; start_j = firstindex(trotter), start_k = firstindex(accuracy)+1)
 
     # save convergence run
     _atomic_save(output_path; bond_dimensions, values, trotter, accuracy, indices, metadata = run_metadata)
