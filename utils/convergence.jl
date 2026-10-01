@@ -56,8 +56,9 @@ function _run_convergence!(value_func, S, trotter, bcf, kwargs, accuracy,
                 values[j, k]          = value_func(MyPT)
                 indices[j]            = k
 
-                #saving process tensor 
-                !isnothing(pt_path) && jldsave(joinpath(pt_path, "pt_$(j)_$(k).jld2"); MyPT, trotter = trotter[j], accuracy = accuracy[k], bdim = bond_dimensions[j, k])
+                #saving process tensor and (updated) parameters
+                !isnothing(pt_path) && jldsave(joinpath(pt_path, "pt_$(j)_$(k).jld2"); MyPT, trotter = trotter[j], accuracy = accuracy[k], bdim = bond_dimensions[j, k]) 
+                !isnothing(pt_path) && jldsave(joinpath(pt_path, "convergence_param.jld2"); trotter, accuracy, bond_dimensions)
 
                 checkpoint(j, k; broke = false)
                 report(j, k, bond_dimensions[j, k])
