@@ -7,6 +7,11 @@ using InteractiveUtils
 using Pkg
 using UUIDs
 
+const PT_DIRNAME = "process_tensors"
+const PT_PARAMS_FILE  = "convergence_params.jld2"
+
+
+
 function _atomic_save(dest; kwargs...)
     tmp = dest * ".tmp"
     jldsave(tmp; kwargs...)
@@ -115,7 +120,7 @@ function _run_convergence!(value_func, S, trotter, bcf, kwargs, accuracy,
 
                 #saving process tensor and (updated) parameters
                 !isnothing(pt_path) && jldsave(joinpath(pt_path, "pt_$(j)_$(k).jld2"); MyPT, trotter = trotter[j], accuracy = accuracy[k], bdim = bond_dimensions[j, k], metadata = run_metadata) 
-                !isnothing(pt_path) && jldsave(joinpath(pt_path, "convergence_param.jld2"); trotter, accuracy, bond_dimensions, metadata = run_metadata)
+                !isnothing(pt_path) && jldsave(joinpath(pt_path, PT_PARAMS_FILE); trotter, accuracy, bond_dimensions, metadata = run_metadata)
 
                 checkpoint(j, k; broke = false)
                 report(j, k, bond_dimensions[j, k])
@@ -147,37 +152,30 @@ artifacts unless `resume` is `true`.
 - `pt_save`: if `true`, prepare a `pt_<filename>` directory; else `pt_path = nothing`.
 - `resume`: allow existing checkpoint/PT files.
 """
-function _resolve_paths(path, filename, pt_save; resume::Bool = false)
+function _resolve_paths(path, model_tag, value_tag, param_tag, pt_save; resume::Bool = false)
     # assert that `path` points to a directory
     path = abspath(expanduser(path))
     isdir(path) || throw(ArgumentError("Provided path is not a directory: $path"))
 
-    # strip a trailing ".jld2" from filename if present
-    endswith(filename, ".jld2") && (filename = filename[1:end-length(".jld2")])
-
-    # assert that path/filename is a directory; if not, create it
-    target_dir = joinpath(path, filename)
+    # check that target directory does not already exist and create it 
+    target_dir = joinpath(path, join(filter(!isempty, [model_tag, param_tag]), "_"))
     !isdir(target_dir) && mkpath(target_dir)
 
 
     # if path/filename already contains "filename.jld2" or
     #    "filename.ckpt.jld2", throw an error
-    output_path = joinpath(target_dir, filename * ".jld2")
-    ckpt_path   = joinpath(target_dir, filename * ".ckpt.jld2")
-    isfile(output_path) && error("Convergence results with filename \"$(filename).jld2\" " *"already exist in $target_dir.")
+    output_path = joinpath(target_dir, value_tag * ".jld2")
+    ckpt_path   = joinpath(target_dir, value_tag * ".ckpt.jld2")
+    isfile(output_path) && error("Convergence results with filename \"$(value_tag).jld2\" " *"already exist in $target_dir.")
 
     if isfile(ckpt_path) && !resume 
-        error("A checkpoint file \"$(filename).ckpt.jld2\" already exists in " *
+        error("A checkpoint file \"$(value_tag).ckpt.jld2\" already exists in " *
             "$target_dir. Use `resume_from_checkpoint()`.")
     end
 
     if pt_save
-        pt_path = joinpath(target_dir, "pt_" * filename)
-        if isdir(pt_path)
-            resume == false && error("A process-tensor directory \"pt_$(filename)\" already " *"exists in $target_dir. Use `resume_from_checkpoint()` " *"to continue from it.")
-        else
-            mkpath(pt_path)
-        end
+        pt_path = joinpath(target_dir, PT_DIRNAME)
+        !isdir(pt_path) && mkpath(pt_path)
     else
         pt_path = nothing
     end
@@ -220,13 +218,13 @@ checkpointing throughout and writing final results to disk. Returns
 - `label`, `metadata`: user annotations stored in metadata (keyword).
 - `kwargs...`: forwarded to `uniTEMPO`.
 """
-function convergence(value_func::Function, s::Union{AbstractMatrix{<:Number}, Vector}, trotter::AbstractArray{<:Number}, bcf::Union{Function, Array}, accuracy::AbstractArray{<:Number};
-                    path::String = pwd(), filename::String = "convergence", pt_save::Bool = false, 
-                    label::String= "", metadata::Dict{String,Any} = Dict{String,Any}(), 
-                    kwargs...)
+function convergence(   value_func::Function, 
+                        s::Union{AbstractMatrix{<:Number}, Vector}, trotter::AbstractArray{<:Number}, bcf::Union{Function, Array}, accuracy::AbstractArray{<:Number};
+                        path::String = pwd(), model_tag::String = "convergence", value_tag::String = "convergence_values", param_tag::String = "",
+                        pt_save::Bool = false, metadata::Dict{String,Any} = Dict{String,Any}(), 
+                        kwargs...)
 
     
-   
     # --- Probe cell (1,1): validates inputs, infers T, 
     pt_first = uniTEMPO(s, first(trotter), bcf, first(accuracy); kwargs...)
     v_first  = value_func(pt_first)
@@ -234,7 +232,7 @@ function convergence(value_func::Function, s::Union{AbstractMatrix{<:Number}, Ve
     bdim_first = bond_dim(pt_first)
 
     # resolve paths
-    output_path, checkpoint_path, pt_path = _resolve_paths(path, filename, pt_save)
+    out_path, ckpt_path, pt_path = _resolve_paths(path, model_tag, value_tag, param_tag, pt_save)
 
     # allocate results array
     bond_dimensions = Array{Union{Int64, Missing}}(missing, length(trotter), length(accuracy))
@@ -247,29 +245,32 @@ function convergence(value_func::Function, s::Union{AbstractMatrix{<:Number}, Ve
 
     # define convergence run metadata
     run_metadata = merge(Dict{String,Any}(
-            "label"      => label,
-            "value_type" => string(T),
-            "created"    => string(Dates.now()),
-            "n_trotter"  => length(trotter),
-            "n_accuracy" => length(accuracy),
-            "kwargs"  => NamedTuple(kwargs),
-            "pt_save" => pt_save,
+            "model" => model_tag,
+            "value" => value_tag, 
+            "params" => param_tag,
+            "created" => string(Dates.now()),
             "run_id" => string(uuid4()),
             "env" => _capture_env(),
+            
+            "value_type" => string(T),
+            "pt_save" => pt_save,
+            "kwargs"  => NamedTuple(kwargs),
         ), metadata)
 
     # make first checkpoint
-    checkpoint = _make_checkpoint(checkpoint_path, bond_dimensions, values, trotter, accuracy, indices, run_metadata)
+    checkpoint = _make_checkpoint(ckpt_path, bond_dimensions, values, trotter, accuracy, indices, run_metadata)
 
-    # checkpoint save of first run
+    # checkpoint save of first run and process tensor save
     checkpoint(firstindex(trotter), firstindex(accuracy); broke = false)
-
+    !isnothing(pt_path) && jldsave(joinpath(pt_path, "pt_$(firstindex(trotter))_$(firstindex(accuracy)).jld2"); MyPT = pt_first, trotter = first(trotter), accuracy = first(accuracy), bdim = first(bond_dimensions), metadata = run_metadata) 
+    !isnothing(pt_path) && jldsave(joinpath(pt_path, PT_PARAMS_FILE); trotter, accuracy, bond_dimensions, metadata = run_metadata)
+    
     # convergence run
     _run_convergence!(value_func, s, trotter, bcf, kwargs, accuracy, bond_dimensions, values, indices, checkpoint, pt_path; start_j = firstindex(trotter), start_k = firstindex(accuracy)+1, run_metadata)
 
     # save convergence run
-    _atomic_save(output_path; bond_dimensions, values, trotter, accuracy, indices, metadata = run_metadata)
-    isfile(checkpoint_path) && rm(checkpoint_path)
+    _atomic_save(out_path; bond_dimensions, values, trotter, accuracy, indices, metadata = run_metadata)
+    isfile(ckpt_path) && rm(ckpt_path)
                 
     return bond_dimensions, values, indices
 end                    
@@ -288,13 +289,13 @@ the saved position and finalizing the results. Returns `(bond_dimensions, values
 - `label`: optional label; warns if it differs from the stored one (keyword).
 - `pt_save`: whether process tensors are being saved (keyword).
 """
-function resume_from_checkpoint(value_func::Function, s::Union{AbstractMatrix{<:Number}, Vector},bcf::Union{Function, Array}; path::String = pwd(), filename::String = "convergence", label::String = "",pt_save::Bool = false)
+function resume_from_checkpoint(value_func::Function, s::Union{AbstractMatrix{<:Number}, Vector},bcf::Union{Function, Array}; path::String = pwd(), model_tag::String = "convergence", value_tag::String = "convergence_values", param_tag::String = "",pt_save::Bool = false)
 
-    output_path, checkpoint_path, pt_path = _resolve_paths(path, filename, pt_save; resume = true)
-    @assert isfile(checkpoint_path) "No checkpoint found at: '$checkpoint_path'"
+    out_path, ckpt_path, pt_path = _resolve_paths(path, model_tag, value_tag, param_tag, pt_save; resume = true)
+    @assert isfile(ckpt_path) "No checkpoint found at: '$ckpt_path'"
 
     # --- load saved state ---
-    state           = load(checkpoint_path)
+    state           = load(ckpt_path)
     bond_dimensions = state["bond_dimensions"]
     values          = state["values"]
     trotter         = state["trotter"]
@@ -304,16 +305,16 @@ function resume_from_checkpoint(value_func::Function, s::Union{AbstractMatrix{<:
     k_saved         = state["accuracy_index"]
     broke           = get(state, "broke", false)
     saved_meta      = get(state, "metadata", Dict{String,Any}())
-    saved_label     = get(saved_meta, "label", "")
+    saved_value_tag = get(saved_meta, "value", "")
     kwargs          = get(saved_meta, "kwargs", NamedTuple())
     stored_pt       = get(saved_meta, "pt_save", false)
 
     stored_pt == pt_save || error("pt_save = $pt_save disagrees with checkpoint ($stored_pt)")
 
-    @info "Resuming convergence run" quantity=saved_label value_type=get(saved_meta, "value_type", "unknown") created=get(saved_meta, "created", "unknown")
+    @info "Resuming convergence run" quantity=saved_value_tag created=get(saved_meta, "created", "unknown")
 
-    if !isempty(label) && !isempty(saved_label) && label != saved_label
-        @warn "Resume label differs from checkpoint" supplied = label stored = saved_label
+    if saved_value_tag != value_tag
+        @warn "Resume value_tag differs from checkpoint" supplied = label stored = saved_value_tag
     end
 
 
@@ -350,7 +351,7 @@ function resume_from_checkpoint(value_func::Function, s::Union{AbstractMatrix{<:
     end
 
 
-    checkpoint = _make_checkpoint(checkpoint_path, bond_dimensions, values,
+    checkpoint = _make_checkpoint(ckpt_path, bond_dimensions, values,
                                   trotter, accuracy, indices, saved_meta)
 
     # Already complete: just finalize.
@@ -364,9 +365,9 @@ function resume_from_checkpoint(value_func::Function, s::Union{AbstractMatrix{<:
     end
 
     
-    _atomic_save(output_path; bond_dimensions, values, trotter, accuracy, indices,
+    _atomic_save(out_path; bond_dimensions, values, trotter, accuracy, indices,
             metadata = saved_meta)
-    isfile(checkpoint_path) && rm(checkpoint_path)
+    isfile(ckpt_path) && rm(ckpt_path)
 
     return bond_dimensions, values, indices
 end
