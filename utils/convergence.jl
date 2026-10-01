@@ -3,12 +3,69 @@ using JLD2
 using Dates 
 using ProgressMeter
 using Printf
+using InteractiveUtils
+using Pkg
+using UUIDs
 
 function _atomic_save(dest; kwargs...)
     tmp = dest * ".tmp"
     jldsave(tmp; kwargs...)
     mv(tmp, dest; force = true)
 end
+
+"""
+    _capture_env()
+
+Snapshot the Julia build, threading configuration, and host machine at the time
+of a convergence run.
+
+Fields are captured defensively: an unavailable value is recorded as
+`"unavailable"` rather than raising, so provenance capture can never abort a run.
+"""
+function _capture_env()
+    probe(f, default = "unavailable") = try f() catch; default end
+
+    return Dict{String,Any}(
+        # --- versions ---
+        "julia_version"    => string(VERSION),
+        "unitempo_version" => probe(() -> string(pkgversion(UniformTEMPO))),
+        "project"          => probe(() -> Base.active_project()),
+
+        # --- threading / BLAS
+        "julia_threads"    => Threads.nthreads(),
+        "blas_threads"     => probe(() -> BLAS.get_num_threads(), -1),
+        "blas_config"      => probe(() -> string(BLAS.get_config())),
+
+        # --- machine ---
+        "hostname"         => probe(() -> gethostname()),
+        "machine"          => string(Sys.MACHINE),
+        "cpu_name"         => probe(() -> Sys.CPU_NAME),
+        "cpu_threads"      => Sys.CPU_THREADS,
+        "total_memory_gb"  => probe(() -> round(Sys.total_memory() / 2^30; digits = 2), -1.0),
+
+        # --- scheduler / shell ---
+        "env_vars"         => _relevant_env_vars(),
+    )
+end
+
+"""
+    _relevant_env_vars()
+
+Capture threading and batch-scheduler environment variables. Only variables that
+are actually set are stored, keeping the record compact.
+"""
+function _relevant_env_vars()
+    keys_of_interest = [
+        "JULIA_NUM_THREADS", "OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS",
+        "MKL_NUM_THREADS", "JULIA_EXCLUSIVE", "JULIA_CPU_TARGET",
+        "SLURM_JOB_ID", "SLURM_JOB_NAME", "SLURM_JOB_NODELIST",
+        "SLURM_CPUS_PER_TASK", "SLURM_ARRAY_TASK_ID",
+        "PBS_JOBID", "LSB_JOBID",
+    ]
+    return Dict{String,String}(k => ENV[k] for k in keys_of_interest if haskey(ENV, k))
+end
+
+
 
 """
     _run_convergence!(value_func, S, trotter, bcf, pt_kwargs, accuracy,
@@ -31,7 +88,7 @@ Returns `(bond_dimensions, values, indices)`.
 """
 function _run_convergence!(value_func, S, trotter, bcf, kwargs, accuracy,
                            bond_dimensions, values, indices,
-                           checkpoint, pt_path; start_j::Int = 1, start_k::Int = 1)
+                           checkpoint, pt_path; start_j::Int = 1, start_k::Int = 1, run_metadata)
 
     n_j, n_k = length(trotter), length(accuracy)
     total = n_j * n_k 
@@ -57,8 +114,8 @@ function _run_convergence!(value_func, S, trotter, bcf, kwargs, accuracy,
                 indices[j]            = k
 
                 #saving process tensor and (updated) parameters
-                !isnothing(pt_path) && jldsave(joinpath(pt_path, "pt_$(j)_$(k).jld2"); MyPT, trotter = trotter[j], accuracy = accuracy[k], bdim = bond_dimensions[j, k]) 
-                !isnothing(pt_path) && jldsave(joinpath(pt_path, "convergence_param.jld2"); trotter, accuracy, bond_dimensions)
+                !isnothing(pt_path) && jldsave(joinpath(pt_path, "pt_$(j)_$(k).jld2"); MyPT, trotter = trotter[j], accuracy = accuracy[k], bdim = bond_dimensions[j, k], metadata = run_metadata) 
+                !isnothing(pt_path) && jldsave(joinpath(pt_path, "convergence_param.jld2"); trotter, accuracy, bond_dimensions, metadata = run_metadata)
 
                 checkpoint(j, k; broke = false)
                 report(j, k, bond_dimensions[j, k])
@@ -141,7 +198,6 @@ state to `checkpoint_path` (via a temp file + `mv`).
 - `trotter`, `accuracy`: parameter grids.
 - `run_metadata`: metadata dictionary to embed.
 """
-
 function _make_checkpoint(checkpoint_path, bond_dimensions, values, trotter, accuracy, indices, run_metadata)
     return (j, k; broke::Bool = false) -> _atomic_save(checkpoint_path; bond_dimensions, values, trotter, accuracy, trotter_index = j, accuracy_index = k, indices, broke, metadata = run_metadata)
 end
@@ -164,7 +220,6 @@ checkpointing throughout and writing final results to disk. Returns
 - `label`, `metadata`: user annotations stored in metadata (keyword).
 - `kwargs...`: forwarded to `uniTEMPO`.
 """
-
 function convergence(value_func::Function, s::Union{AbstractMatrix{<:Number}, Vector}, trotter::AbstractArray{<:Number}, bcf::Union{Function, Array}, accuracy::AbstractArray{<:Number};
                     path::String = pwd(), filename::String = "convergence", pt_save::Bool = false, 
                     label::String= "", metadata::Dict{String,Any} = Dict{String,Any}(), 
@@ -199,6 +254,8 @@ function convergence(value_func::Function, s::Union{AbstractMatrix{<:Number}, Ve
             "n_accuracy" => length(accuracy),
             "kwargs"  => NamedTuple(kwargs),
             "pt_save" => pt_save,
+            "run_id" => string(uuid4()),
+            "env" => _capture_env(),
         ), metadata)
 
     # make first checkpoint
@@ -208,7 +265,7 @@ function convergence(value_func::Function, s::Union{AbstractMatrix{<:Number}, Ve
     checkpoint(firstindex(trotter), firstindex(accuracy); broke = false)
 
     # convergence run
-    _run_convergence!(value_func, s, trotter, bcf, kwargs, accuracy, bond_dimensions, values, indices, checkpoint, pt_path; start_j = firstindex(trotter), start_k = firstindex(accuracy)+1)
+    _run_convergence!(value_func, s, trotter, bcf, kwargs, accuracy, bond_dimensions, values, indices, checkpoint, pt_path; start_j = firstindex(trotter), start_k = firstindex(accuracy)+1, run_metadata)
 
     # save convergence run
     _atomic_save(output_path; bond_dimensions, values, trotter, accuracy, indices, metadata = run_metadata)
@@ -231,7 +288,6 @@ the saved position and finalizing the results. Returns `(bond_dimensions, values
 - `label`: optional label; warns if it differs from the stored one (keyword).
 - `pt_save`: whether process tensors are being saved (keyword).
 """
-
 function resume_from_checkpoint(value_func::Function, s::Union{AbstractMatrix{<:Number}, Vector},bcf::Union{Function, Array}; path::String = pwd(), filename::String = "convergence", label::String = "",pt_save::Bool = false)
 
     output_path, checkpoint_path, pt_path = _resolve_paths(path, filename, pt_save; resume = true)
@@ -271,6 +327,29 @@ function resume_from_checkpoint(value_func::Function, s::Union{AbstractMatrix{<:
         start_k = k_saved + 1
     end
 
+    # record provenance of this resume. Appending resume history to original saved medatada
+    resume_env = _capture_env()
+
+    history = get(saved_meta, "resume_history", Vector{Dict{String,Any}}())
+    push!(history, Dict{String,Any}(
+        "resumed_at"  => string(Dates.now()),
+        "resume_id"   => string(uuid4()),
+        "start_index" => (start_j, start_k),
+        "env"         => resume_env,
+    ))
+    saved_meta["resume_history"] = history
+
+    # the one difference that can make the second half of a grid inconsistent
+    # with the first: a change in the TEMPO implementation itself
+    orig_version   = get(get(saved_meta, "env", Dict{String,Any}()), "unitempo_version", nothing)
+    resume_version = get(resume_env, "unitempo_version", nothing)
+
+    if !isnothing(orig_version) && orig_version != resume_version
+        @warn "UniformTEMPO version differs from the original run; the resumed " *
+              "portion of the grid may not be consistent with the completed part" original=orig_version now=resume_version
+    end
+
+
     checkpoint = _make_checkpoint(checkpoint_path, bond_dimensions, values,
                                   trotter, accuracy, indices, saved_meta)
 
@@ -281,7 +360,7 @@ function resume_from_checkpoint(value_func::Function, s::Union{AbstractMatrix{<:
         @info "Resume position" start_trotter = start_j start_accuracy = start_k
         _run_convergence!(value_func, s, trotter, bcf, kwargs, accuracy,
                           bond_dimensions, values, indices,
-                          checkpoint, pt_path; start_j = start_j, start_k = start_k)
+                          checkpoint, pt_path; start_j = start_j, start_k = start_k, run_metadata = saved_meta)
     end
 
     
