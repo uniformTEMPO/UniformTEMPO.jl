@@ -138,28 +138,28 @@ function _run_convergence!(value_func, S, trotter, bcf, kwargs, accuracy,
     finish!(prog)
     return bond_dimensions, values, indices
 end
+
 """
-    _resolve_paths(path, model_tag, value_tag, param_tag, pt_save; resume = false)
+    _resolve_paths(path, model_tag, value_tag, param_tag, pt_save; mode = :fresh)
 
 Validate the output location and return `(output_path, ckpt_path, pt_path)`
-without touching the filesystem. Directories are created separately by
-[`_create_dirs`](@ref), once the probe cell has succeeded, so a failed probe
-never leaves an empty run folder behind.
+without touching the filesystem. The run folder is `path/<model_tag>_<param_tag>`.
 
-The run folder is `path/<model_tag>_<param_tag>`.
+Modes:
+- `:fresh` (`convergence`): `<value_tag>.jld2` and `<value_tag>.ckpt.jld2` must not
+  exist; if `pt_save = true`, the run folder must not exist yet.
+- `:resume` (`resume_from_checkpoint`): `<value_tag>.ckpt.jld2` must exist; if
+  `pt_save = true`, `process_tensors/` must exist.
+- `:from_pts` (`convergence_from_process_tensors`): requires `pt_save = true`;
+  `process_tensors/` must exist and contain `PT_PARAMS_FILE` and at least one
+  `pt_*.jld2`; `<value_tag>.ckpt.jld2` must not exist.
 
-Fresh run (`resume = false`):
-- if `pt_save = true`, the run folder must not exist yet. A folder holding saved
-  process tensors is owned by the run that produced them; further observables
-  are computed from those PTs, not by re-running `convergence` with `pt_save`.
-- `<value_tag>.jld2` and `<value_tag>.ckpt.jld2` must not exist.
-
-Resume (`resume = true`):
-- `<value_tag>.ckpt.jld2` must exist and `<value_tag>.jld2` must not.
-- if `pt_save = true`, the `process_tensors/` directory must exist.
+In every mode, `<value_tag>.jld2` must not exist.
 """
-function _resolve_paths(path, model_tag, value_tag, param_tag, pt_save; resume::Bool = false)
-    # assert that `path` points to a directory
+function _resolve_paths(path, model_tag, value_tag, param_tag, pt_save; mode::Symbol = :fresh)
+    mode in (:fresh, :resume, :from_pts) || throw(ArgumentError("Unknown mode :$mode"))
+    mode == :from_pts && !pt_save && throw(ArgumentError("mode = :from_pts requires pt_save = true"))
+
     path = abspath(expanduser(path))
     isdir(path) || throw(ArgumentError("Provided path is not a directory: $path"))
 
@@ -170,12 +170,7 @@ function _resolve_paths(path, model_tag, value_tag, param_tag, pt_save; resume::
 
     isfile(output_path) && error("Convergence results \"$(value_tag).jld2\" already exist in $target_dir.")
 
-    if resume
-        isfile(ckpt_path) || error("No checkpoint \"$(value_tag).ckpt.jld2\" found in $target_dir.")
-        if pt_save && !isdir(pt_path)
-            error("pt_save = true, but no \"$PT_DIRNAME\" directory exists in $target_dir.")
-        end
-    else
+    if mode == :fresh
         if pt_save && isdir(target_dir)
             error("Run folder $target_dir already exists. Process tensors can only be " *
                   "saved into a new folder: choose a different `model_tag`/`param_tag`, " *
@@ -183,6 +178,20 @@ function _resolve_paths(path, model_tag, value_tag, param_tag, pt_save; resume::
         end
         isfile(ckpt_path) && error("A checkpoint \"$(value_tag).ckpt.jld2\" already exists in " *
                                    "$target_dir. Use `resume_from_checkpoint()`.")
+
+    elseif mode == :resume
+        isfile(ckpt_path) || error("No checkpoint \"$(value_tag).ckpt.jld2\" found in $target_dir.")
+        pt_save && !isdir(pt_path) &&
+            error("pt_save = true, but no \"$PT_DIRNAME\" directory exists in $target_dir.")
+
+    else mode == :from_pts # :from_pts
+        isfile(ckpt_path) &&
+            error("A checkpoint \"$(value_tag).ckpt.jld2\" exists in $target_dir. Finish that run " *
+                  "with `resume_from_checkpoint()` or choose a different `value_tag`.")
+        isdir(pt_path) || error("No \"$PT_DIRNAME\" directory found in $target_dir.")
+        isfile(joinpath(pt_path, PT_PARAMS_FILE)) || error("No \"$PT_PARAMS_FILE\" found in $pt_path.")
+        any(f -> startswith(f, "pt_") && endswith(f, ".jld2"), readdir(pt_path)) ||
+            error("The \"$PT_DIRNAME\" directory in $target_dir contains no process tensors.")
     end
 
     return output_path, ckpt_path, pt_path
@@ -296,8 +305,7 @@ the saved position and finalizing the results. Returns `(bond_dimensions, values
 """
 function resume_from_checkpoint(value_func::Function, s::Union{AbstractMatrix{<:Number}, Vector},bcf::Union{Function, Array}; path::String = pwd(), model_tag::String = "convergence", value_tag::String = "convergence_values", param_tag::String = "",pt_save::Bool = false)
 
-    out_path, ckpt_path, pt_path = _resolve_paths(path, model_tag, value_tag, param_tag, pt_save; resume = true)
-    @assert isfile(ckpt_path) "No checkpoint found at: '$ckpt_path'"
+    out_path, ckpt_path, pt_path = _resolve_paths(path, model_tag, value_tag, param_tag, pt_save; mode = :resume)
 
     # --- load saved state ---
     state           = load(ckpt_path)
@@ -376,5 +384,3 @@ function resume_from_checkpoint(value_func::Function, s::Union{AbstractMatrix{<:
 
     return bond_dimensions, values, indices
 end
-
-
