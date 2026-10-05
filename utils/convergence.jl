@@ -184,7 +184,7 @@ function _resolve_paths(path, model_tag, value_tag, param_tag, pt_save; mode::Sy
         pt_save && !isdir(pt_path) &&
             error("pt_save = true, but no \"$PT_DIRNAME\" directory exists in $target_dir.")
 
-    else mode == :from_pts # :from_pts
+    else  # :from_pts
         isfile(ckpt_path) &&
             error("A checkpoint \"$(value_tag).ckpt.jld2\" exists in $target_dir. Finish that run " *
                   "with `resume_from_checkpoint()` or choose a different `value_tag`.")
@@ -247,6 +247,8 @@ function convergence(   value_func::Function,
 
     # resolve paths
     out_path, ckpt_path, pt_path = _resolve_paths(path, model_tag, value_tag, param_tag, pt_save)
+    # probe succeeded: create the run folder (and process_tensors/ if needed)
+    mkpath(something(pt_path, dirname(out_path)))
 
     # allocate results array
     bond_dimensions = Array{Union{Int64, Missing}}(missing, length(trotter), length(accuracy))
@@ -256,6 +258,7 @@ function convergence(   value_func::Function,
     # save first run 
     bond_dimensions[1] = bdim_first
     values[1] = v_first
+    indices[1] = 1
 
     # define convergence run metadata
     run_metadata = merge(Dict{String,Any}(
@@ -327,7 +330,7 @@ function resume_from_checkpoint(value_func::Function, s::Union{AbstractMatrix{<:
     @info "Resuming convergence run" quantity=saved_value_tag created=get(saved_meta, "created", "unknown")
 
     if saved_value_tag != value_tag
-        @warn "Resume value_tag differs from checkpoint" supplied = label stored = saved_value_tag
+        @warn "Resume value_tag differs from checkpoint" supplied = value_tag stored = saved_value_tag
     end
 
 
@@ -381,6 +384,127 @@ function resume_from_checkpoint(value_func::Function, s::Union{AbstractMatrix{<:
     _atomic_save(out_path; bond_dimensions, values, trotter, accuracy, indices,
             metadata = saved_meta)
     isfile(ckpt_path) && rm(ckpt_path)
+
+    return bond_dimensions, values, indices
+end
+
+
+
+"""
+    _load_pt(pt_path, j, k, trotter, accuracy)
+
+Load the process tensor of grid cell `(j, k)` and check that the Trotter step and
+accuracy stored alongside it match the grid in `PT_PARAMS_FILE`.
+"""
+function _load_pt(pt_path, j, k, trotter, accuracy)
+    file = joinpath(pt_path, "pt_$(j)_$(k).jld2")
+    isfile(file) || error("Process tensor file missing: $file")
+
+    pt, tr, acc = load(file, "MyPT", "trotter", "accuracy")
+    (tr ≈ trotter[j] && acc ≈ accuracy[k]) ||
+        error("Grid mismatch in $file: stored (trotter = $tr, accuracy = $acc), " *
+              "expected (trotter = $(trotter[j]), accuracy = $(accuracy[k])).")
+    return pt
+end
+
+"""
+    convergence_from_process_tensors(value_func;
+                                     path = pwd(), model_tag = "convergence",
+                                     value_tag = "convergence_values", param_tag = "",
+                                     metadata = Dict{String,Any}())
+
+Run a full convergence study of `value_func` using process tensors saved by an
+earlier `convergence(...; pt_save = true)` run, without recomputing them.
+Returns `(bond_dimensions, values, indices)`.
+
+The grid (`trotter`, `accuracy`) and the bond dimensions are read from
+`PT_PARAMS_FILE`. Results are written to `path/<model_tag>_<param_tag>/<value_tag>.jld2`.
+
+# Arguments
+- `value_func`: reduces each process tensor to the recorded observable.
+- `path`, `model_tag`, `param_tag`: locate the run folder holding the process tensors (keyword).
+- `value_tag`: name of the output file for this observable (keyword).
+- `metadata`: user annotations merged into the stored metadata (keyword).
+"""
+function convergence_from_process_tensors(value_func::Function, model_tag::String, param_tag::String, value_tag::String; path::String = pwd(), metadata::Dict{String,Any} = Dict{String,Any}())
+
+    out_path, _, pt_path = _resolve_paths(path, model_tag, value_tag, param_tag, true; mode = :from_pts)
+    target_dir = dirname(out_path)
+    
+    # --- load grid and provenance of the process-tensor run ---
+    params    = load(joinpath(pt_path, PT_PARAMS_FILE))
+    trotter   = params["trotter"]
+    accuracy  = params["accuracy"]
+    pt_bdims  = params["bond_dimensions"]
+    pt_meta   = get(params, "metadata", Dict{String,Any}())
+
+    # an unfinished PT run leaves its own checkpoint behind: the grid may be partial
+    pt_value_tag = get(pt_meta, "value", nothing)
+    if !isnothing(pt_value_tag) && isfile(joinpath(target_dir, pt_value_tag * ".ckpt.jld2"))
+        @warn "The process-tensor run appears unfinished; the grid may be incomplete" checkpoint = pt_value_tag * ".ckpt.jld2"
+    end
+
+    # cells with a saved process tensor, in row-major (trotter, then accuracy) order
+    cells = [(j, k) for j in axes(pt_bdims, 1) for k in axes(pt_bdims, 2) if !ismissing(pt_bdims[j, k])]
+    isempty(cells) && error("\"$PT_PARAMS_FILE\" in $pt_path records no completed grid cells.")
+
+    # --- probe the first available cell: validates value_func, infers T ---
+    j1, k1  = first(cells)
+    v_first = value_func(_load_pt(pt_path, j1, k1, trotter, accuracy))
+    T       = typeof(v_first)
+
+    # allocate results arrays
+    bond_dimensions = Array{Union{Int64, Missing}}(missing, length(trotter), length(accuracy))
+    values          = Array{Union{T, Missing}}(missing, length(trotter), length(accuracy))
+    indices         = Array{Union{Int, Missing}}(missing, length(trotter))
+
+    # define convergence run metadata
+    run_env = _capture_env()
+    run_metadata = merge(Dict{String,Any}(
+            "model"      => model_tag,
+            "value"      => value_tag,
+            "params"     => param_tag,
+            "created"    => string(Dates.now()),
+            "run_id"     => string(uuid4()),
+            "env"        => run_env,
+
+            "value_type" => string(T),
+            "pt_save"    => false,
+            "source"     => "process_tensors",
+            "kwargs"     => get(pt_meta, "kwargs", NamedTuple()),
+            "pt_run"     => pt_meta,          # full provenance of the run that produced the PTs
+        ), metadata)
+
+    # observables of a PT may depend on the package version that reads it
+    orig_version = get(get(pt_meta, "env", Dict{String,Any}()), "unitempo_version", nothing)
+    now_version  = get(run_env, "unitempo_version", nothing)
+    if !isnothing(orig_version) && orig_version != now_version
+        @warn "UniformTEMPO version differs from the run that produced the process tensors" original = orig_version now = now_version
+    end
+
+    # --- convergence run over saved process tensors ---
+    n_j, n_k = length(trotter), length(accuracy)
+    prog = Progress(length(cells); dt = 0.5, desc = "Convergence from PTs: ",
+                    barglyphs = BarGlyphs("[=> ]"), color = :cyan)
+
+    for (n, (j, k)) in enumerate(cells)
+        v = n == 1 ? v_first : value_func(_load_pt(pt_path, j, k, trotter, accuracy))
+
+        bond_dimensions[j, k] = pt_bdims[j, k]
+        values[j, k]          = v
+        indices[j]            = k
+
+        update!(prog, n; showvalues = [
+            (:trotter_step,   @sprintf("%.1e (%d/%d)", trotter[j], j, n_j)),
+            (:accuracy,       @sprintf("%.1e (%d/%d)", accuracy[k], k, n_k)),
+            (:bond_dimension, bond_dimensions[j, k]),
+            (:elapsed_s,      round(time() - prog.tinit; digits = 2)),
+        ])
+    end
+    finish!(prog)
+
+    # save convergence run
+    _atomic_save(out_path; bond_dimensions, values, trotter, accuracy, indices, metadata = run_metadata)
 
     return bond_dimensions, values, indices
 end
