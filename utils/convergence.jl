@@ -138,46 +138,51 @@ function _run_convergence!(value_func, S, trotter, bcf, kwargs, accuracy,
     finish!(prog)
     return bond_dimensions, values, indices
 end
-
 """
-    _resolve_paths(path, filename, pt_save; resume = false)
+    _resolve_paths(path, model_tag, value_tag, param_tag, pt_save; resume = false)
 
-Validate `path`, create the `path/filename` output directory, and return the tuple
-`(output_path, ckpt_path, pt_path)`. Errors on pre-existing results/checkpoint/PT
-artifacts unless `resume` is `true`.
+Validate the output location and return `(output_path, ckpt_path, pt_path)`
+without touching the filesystem. Directories are created separately by
+[`_create_dirs`](@ref), once the probe cell has succeeded, so a failed probe
+never leaves an empty run folder behind.
 
-# Arguments
-- `path`: existing base directory.
-- `filename`: run name (trailing `.jld2` is stripped).
-- `pt_save`: if `true`, prepare a `pt_<filename>` directory; else `pt_path = nothing`.
-- `resume`: allow existing checkpoint/PT files.
+The run folder is `path/<model_tag>_<param_tag>`.
+
+Fresh run (`resume = false`):
+- if `pt_save = true`, the run folder must not exist yet. A folder holding saved
+  process tensors is owned by the run that produced them; further observables
+  are computed from those PTs, not by re-running `convergence` with `pt_save`.
+- `<value_tag>.jld2` and `<value_tag>.ckpt.jld2` must not exist.
+
+Resume (`resume = true`):
+- `<value_tag>.ckpt.jld2` must exist and `<value_tag>.jld2` must not.
+- if `pt_save = true`, the `process_tensors/` directory must exist.
 """
 function _resolve_paths(path, model_tag, value_tag, param_tag, pt_save; resume::Bool = false)
     # assert that `path` points to a directory
     path = abspath(expanduser(path))
     isdir(path) || throw(ArgumentError("Provided path is not a directory: $path"))
 
-    # check that target directory does not already exist and create it 
-    target_dir = joinpath(path, join(filter(!isempty, [model_tag, param_tag]), "_"))
-    !isdir(target_dir) && mkpath(target_dir)
-
-
-    # if path/filename already contains "filename.jld2" or
-    #    "filename.ckpt.jld2", throw an error
+    target_dir  = joinpath(path, join(filter(!isempty, [model_tag, param_tag]), "_"))
     output_path = joinpath(target_dir, value_tag * ".jld2")
     ckpt_path   = joinpath(target_dir, value_tag * ".ckpt.jld2")
-    isfile(output_path) && error("Convergence results with filename \"$(value_tag).jld2\" " *"already exist in $target_dir.")
+    pt_path     = pt_save ? joinpath(target_dir, PT_DIRNAME) : nothing
 
-    if isfile(ckpt_path) && !resume 
-        error("A checkpoint file \"$(value_tag).ckpt.jld2\" already exists in " *
-            "$target_dir. Use `resume_from_checkpoint()`.")
-    end
+    isfile(output_path) && error("Convergence results \"$(value_tag).jld2\" already exist in $target_dir.")
 
-    if pt_save
-        pt_path = joinpath(target_dir, PT_DIRNAME)
-        !isdir(pt_path) && mkpath(pt_path)
+    if resume
+        isfile(ckpt_path) || error("No checkpoint \"$(value_tag).ckpt.jld2\" found in $target_dir.")
+        if pt_save && !isdir(pt_path)
+            error("pt_save = true, but no \"$PT_DIRNAME\" directory exists in $target_dir.")
+        end
     else
-        pt_path = nothing
+        if pt_save && isdir(target_dir)
+            error("Run folder $target_dir already exists. Process tensors can only be " *
+                  "saved into a new folder: choose a different `model_tag`/`param_tag`, " *
+                  "or set `pt_save = false`.")
+        end
+        isfile(ckpt_path) && error("A checkpoint \"$(value_tag).ckpt.jld2\" already exists in " *
+                                   "$target_dir. Use `resume_from_checkpoint()`.")
     end
 
     return output_path, ckpt_path, pt_path
