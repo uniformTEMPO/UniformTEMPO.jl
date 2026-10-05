@@ -119,8 +119,8 @@ function _run_convergence!(value_func, S, trotter, bcf, kwargs, accuracy,
                 indices[j]            = k
 
                 #saving process tensor and (updated) parameters
-                !isnothing(pt_path) && jldsave(joinpath(pt_path, "pt_$(j)_$(k).jld2"); MyPT, trotter = trotter[j], accuracy = accuracy[k], bdim = bond_dimensions[j, k], metadata = run_metadata) 
-                !isnothing(pt_path) && jldsave(joinpath(pt_path, PT_PARAMS_FILE); trotter, accuracy, bond_dimensions, metadata = run_metadata)
+                !isnothing(pt_path) && _atomic_save(joinpath(pt_path, "pt_$(j)_$(k).jld2"); MyPT, trotter = trotter[j], accuracy = accuracy[k], bdim = bond_dimensions[j, k], metadata = run_metadata) 
+                !isnothing(pt_path) && _atomic_save(joinpath(pt_path, PT_PARAMS_FILE); trotter, accuracy, bond_dimensions, metadata = run_metadata)
 
                 checkpoint(j, k; broke = false)
                 report(j, k, bond_dimensions[j, k])
