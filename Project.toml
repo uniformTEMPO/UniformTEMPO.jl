@@ -5,13 +5,16 @@ version = "0.1.0"
 
 [deps]
 Cubature = "667455a9-e2ce-5579-9412-b964f529a492"
+Dates = "ade2ca70-3891-5945-98fb-dc099432e06a"
 JLD2 = "033835bb-8acc-5ee8-8aae-3f567f8a3819"
 KrylovKit = "0b1a1467-8014-51b9-945f-bf0ae24f4b77"
 LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
 LowRankApprox = "898213cb-b102-5a47-900c-97e73b919f73"
 OMEinsum = "ebe7aa44-baf0-506c-a96f-8464559b3922"
+Printf = "de0858da-6303-5e67-8744-51eddeeeb8d7"
 ProgressMeter = "92933f4c-e287-5a05-a399-4b506db050ca"
 TensorOperations = "6aa20fa7-93e2-5fca-9bc0-fbd0db3c71a2"
+UUIDs = "cf7118a7-6976-5b1a-9a39-7adc72f591a4"
 
 [weakdeps]
 ITensors = "9136182c-28ba-11e9-034c-db9fb085ebd5"
@@ -22,4 +25,7 @@ UniTEMPOITensorsExt = ["ITensors"]
 UniTEMPOOrdinaryDiffEqExt = ["OrdinaryDiffEq"]
 
 [compat]
+Dates = "1.11.0"
 JLD2 = "0.6.5"
+Printf = "1.11.0"
+UUIDs = "1.11.0"
