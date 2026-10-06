@@ -94,7 +94,7 @@ A row is abandoned as soon as `uniTEMPO` hits the bond dimension limit.
 """
 function _run_convergence!(value_func, S, trotter, bcf, kwargs, accuracy,
                            bond_dimensions, values, indices,
-                           checkpoint, pt_path; start_j::Int = 1, start_k::Int = 1, run_metadata)
+                           checkpoint, pt_path; start_j::Int = 1, start_k::Int = 1, metadata)
 
     n_j, n_k = length(trotter), length(accuracy)
     total = n_j * n_k 
@@ -115,15 +115,18 @@ function _run_convergence!(value_func, S, trotter, bcf, kwargs, accuracy,
         for k in k0:lastindex(accuracy)
             try
                 MyPT = uniTEMPO(S, trotter[j], bcf, accuracy[k]; verbose = false, kwargs...)
-                
-                #saving process tensor and (updated) parameters
-                !isnothing(pt_path) && _atomic_save(joinpath(pt_path, "pt_$(j)_$(k).jld2"); MyPT, trotter = trotter[j], accuracy = accuracy[k], bdim = bond_dimensions[j, k], metadata = run_metadata) 
-                !isnothing(pt_path) && _atomic_save(joinpath(pt_path, PT_PARAMS_FILE); trotter, accuracy, bond_dimensions, metadata = run_metadata)
+                bdim = bond_dim(MyPT)
+                v = value_func(MyPT)
 
+                #saving process tensor and (updated) parameters
+                !isnothing(pt_path) && _atomic_save(joinpath(pt_path, "pt_$(j)_$(k).jld2"); MyPT, trotter = trotter[j], accuracy = accuracy[k], bdim, metadata) 
+                
                 #commit computed values after successfull save
-                bond_dimensions[j, k] = bond_dim(MyPT)
-                values[j, k]          = value_func(MyPT)
+                bond_dimensions[j, k] = bdim
+                values[j, k]          = v
                 indices[j]            = k
+
+                !isnothing(pt_path) && _atomic_save(joinpath(pt_path, PT_PARAMS_FILE); trotter, accuracy, bond_dimensions, metadata)
 
                 checkpoint(j, k; broke = false)
                 report(j, k, bond_dimensions[j, k])
@@ -279,12 +282,13 @@ function convergence(   value_func::Function,
     checkpoint = _make_checkpoint(ckpt_path, bond_dimensions, values, trotter, accuracy, indices, metadata)
 
     # checkpoint save of first run and process tensor save
+    !isnothing(pt_path) && _atomic_save(joinpath(pt_path, "pt_$(firstindex(trotter))_$(firstindex(accuracy)).jld2"); MyPT = pt_first, trotter = first(trotter), accuracy = first(accuracy), bdim = first(bond_dimensions), metadata) 
+    !isnothing(pt_path) && _atomic_save(joinpath(pt_path, PT_PARAMS_FILE); trotter, accuracy, bond_dimensions, metadata)
     checkpoint(firstindex(trotter), firstindex(accuracy); broke = false)
-    !isnothing(pt_path) && jldsave(joinpath(pt_path, "pt_$(firstindex(trotter))_$(firstindex(accuracy)).jld2"); MyPT = pt_first, trotter = first(trotter), accuracy = first(accuracy), bdim = first(bond_dimensions), metadata) 
-    !isnothing(pt_path) && jldsave(joinpath(pt_path, PT_PARAMS_FILE); trotter, accuracy, bond_dimensions, metadata)
+    
     
     # convergence run
-    _run_convergence!(value_func, s, trotter, bcf, kwargs, accuracy, bond_dimensions, values, indices, checkpoint, pt_path; start_j = firstindex(trotter), start_k = firstindex(accuracy)+1, run_metadata)
+    _run_convergence!(value_func, s, trotter, bcf, kwargs, accuracy, bond_dimensions, values, indices, checkpoint, pt_path; start_j = firstindex(trotter), start_k = firstindex(accuracy)+1, metadata)
 
     # save convergence run
     _atomic_save(out_path; bond_dimensions, values, trotter, accuracy, indices, metadata)
@@ -378,7 +382,7 @@ function resume_from_checkpoint(value_func::Function, s::Union{AbstractMatrix{<:
         @info "Resume position" start_trotter = start_j start_accuracy = start_k
         _run_convergence!(value_func, s, trotter, bcf, kwargs, accuracy,
                           bond_dimensions, values, indices,
-                          checkpoint, pt_path; start_j = start_j, start_k = start_k, run_metadata = saved_meta)
+                          checkpoint, pt_path; start_j = start_j, start_k = start_k, metadata = saved_meta)
     end
 
     
@@ -421,7 +425,7 @@ The grid and bond dimensions are read from `PT_PARAMS_FILE`. Cells without a sav
 process tensor stay `missing`. The metadata of the original run is stored under
 `"pt_run"`. No checkpoint is written.
 """
-function convergence_from_process_tensors(value_func::Function, model_tag::String, param_tag::String, value_tag::String; path::String = pwd(), metadata::Dict{String,Any} = Dict{String,Any}())
+function convergence_from_process_tensors(value_func::Function, model_tag::String, param_tag::String, value_tag::String; path::String = pwd(), user_metadata::Dict{String,Any} = Dict{String,Any}())
 
     out_path, _, pt_path = _resolve_paths(path, model_tag, value_tag, param_tag, true; mode = :from_pts)
     target_dir = dirname(out_path)
@@ -455,7 +459,7 @@ function convergence_from_process_tensors(value_func::Function, model_tag::Strin
 
     # define convergence run metadata
     run_env = _capture_env()
-    run_metadata = merge(Dict{String,Any}(
+    metadata = Dict{String,Any}(
             "model"      => model_tag,
             "value"      => value_tag,
             "params"     => param_tag,
@@ -468,7 +472,8 @@ function convergence_from_process_tensors(value_func::Function, model_tag::Strin
             "source"     => "process_tensors",
             "kwargs"     => get(pt_meta, "kwargs", NamedTuple()),
             "pt_run"     => pt_meta,          # full provenance of the run that produced the PTs
-        ), metadata)
+            "user"       => user_metadata 
+        )
 
     # observables of a PT may depend on the package version that reads it
     orig_version = get(get(pt_meta, "env", Dict{String,Any}()), "unitempo_version", nothing)
