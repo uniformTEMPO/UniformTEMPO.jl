@@ -10,7 +10,12 @@ const PT_DIRNAME = "process_tensors"
 const PT_PARAMS_FILE  = "convergence_params.jld2"
 
 
+"""
+    _atomic_save(dest; kwargs...)
 
+Write `kwargs` to the JLD2 file `dest` via a temporary file and `mv`, so `dest` is
+never left partially written.
+"""
 function _atomic_save(dest; kwargs...)
     tmp = dest * ".tmp"
     jldsave(tmp; kwargs...)
@@ -18,13 +23,13 @@ function _atomic_save(dest; kwargs...)
 end
 
 """
-    _capture_env()
+    _capture_env() -> Dict{String,Any}
 
-Snapshot the Julia build, threading configuration, and host machine at the time
-of a convergence run.
+Return a snapshot of the Julia and UniformTEMPO versions, the thread and BLAS
+configuration, the host machine, and the relevant environment variables.
 
-Fields are captured defensively: an unavailable value is recorded as
-`"unavailable"` rather than raising, so provenance capture can never abort a run.
+Fields that cannot be read are recorded as `"unavailable"` (or `-1`) instead of
+throwing, so capturing provenance never aborts a run.
 """
 function _capture_env()
     probe(f, default = "unavailable") = try f() catch; default end
@@ -53,10 +58,10 @@ function _capture_env()
 end
 
 """
-    _relevant_env_vars()
+    _relevant_env_vars() -> Dict{String,String}
 
-Capture threading and batch-scheduler environment variables. Only variables that
-are actually set are stored, keeping the record compact.
+Return the threading and batch-scheduler environment variables that are set.
+Unset variables are omitted.
 """
 function _relevant_env_vars()
     keys_of_interest = [
@@ -72,23 +77,20 @@ end
 
 
 """
-    _run_convergence!(value_func, S, trotter, bcf, pt_kwargs, accuracy,
+    _run_convergence!(value_func, S, trotter, bcf, kwargs, accuracy,
                       bond_dimensions, values, indices, checkpoint, pt_path;
-                      start_j = 1, start_k = 1)
+                      start_j = 1, start_k = 1, run_metadata)
 
-Internal convergence loop sweeping over `trotter` × `accuracy`.
+Sweep the `trotter` × `accuracy` grid from `(start_j, start_k)`, filling
+`bond_dimensions`, `values` and `indices` in place. Return them as a tuple.
+
+A row is abandoned as soon as `uniTEMPO` hits the bond dimension limit.
 
 # Arguments
-- `value_func`: reduces a process tensor to the recorded observable.
-- `S`, `bcf`: system matrix and bath correlation function passed to `uniTEMPO`.
-- `trotter`, `accuracy`: grids of Trotter steps and accuracy values.
 - `kwargs`: keyword arguments forwarded to `uniTEMPO`.
-- `bond_dimensions`, `values`, `indices`: result containers, mutated in place.
-- `checkpoint`: callback `(j, k; broke)` that saves state.
-- `pt_path`: directory to save process tensors to file, or `nothing`.
-- `start_j`, `start_k`: starting grid indices (for checkpoint resumes).
-
-Returns `(bond_dimensions, values, indices)`.
+- `checkpoint`: callback `(j, k; broke)` called after every cell.
+- `pt_path`: directory where process tensors are saved, or `nothing` to skip saving.
+- `run_metadata`: metadata stored with each saved process tensor.
 """
 function _run_convergence!(value_func, S, trotter, bcf, kwargs, accuracy,
                            bond_dimensions, values, indices,
@@ -142,20 +144,18 @@ end
 
 """
     _resolve_paths(path, model_tag, value_tag, param_tag, pt_save; mode = :fresh)
+        -> (output_path, ckpt_path, pt_path)
 
-Validate the output location and return `(output_path, ckpt_path, pt_path)`
-without touching the filesystem. The run folder is `path/<model_tag>_<param_tag>`.
+Build and validate the paths of a run in `path/<model_tag>_<param_tag>`, without
+modifying the filesystem. `pt_path` is `nothing` when `pt_save = false`.
 
-Modes:
-- `:fresh` (`convergence`): `<value_tag>.jld2` and `<value_tag>.ckpt.jld2` must not
-  exist; if `pt_save = true`, the run folder must not exist yet.
-- `:resume` (`resume_from_checkpoint`): `<value_tag>.ckpt.jld2` must exist; if
-  `pt_save = true`, `process_tensors/` must exist.
-- `:from_pts` (`convergence_from_process_tensors`): requires `pt_save = true`;
-  `process_tensors/` must exist and contain `PT_PARAMS_FILE` and at least one
-  `pt_*.jld2`; `<value_tag>.ckpt.jld2` must not exist.
+In every mode, `<value_tag>.jld2` must not exist yet.
 
-In every mode, `<value_tag>.jld2` must not exist.
+# Modes
+- `:fresh`: no checkpoint may exist. With `pt_save = true`, the run folder must not exist either.
+- `:resume`: the checkpoint must exist. With `pt_save = true`, so must `process_tensors/`.
+- `:from_pts`: requires `pt_save = true`. `process_tensors/` must hold `PT_PARAMS_FILE`
+  and at least one `pt_*.jld2`. No checkpoint may exist.
 """
 function _resolve_paths(path, model_tag, value_tag, param_tag, pt_save; mode::Symbol = :fresh)
     mode in (:fresh, :resume, :from_pts) || throw(ArgumentError("Unknown mode :$mode"))
@@ -199,17 +199,13 @@ function _resolve_paths(path, model_tag, value_tag, param_tag, pt_save; mode::Sy
 end
 
 """
-    _make_checkpoint(checkpoint_path, bond_dimensions, values, trotter,
-                     accuracy, indices, run_metadata)
+    _make_checkpoint(checkpoint_path, bond_dimensions, values, trotter, accuracy,
+                     indices, run_metadata)
 
-Return a closure `(j, k; broke = false)` that atomically writes the current run
-state to `checkpoint_path` (via a temp file + `mv`).
+Return a closure `(j, k; broke = false)` that atomically saves the current run
+state and grid position `(j, k)` to `checkpoint_path`.
 
-# Arguments
-- `checkpoint_path`: destination checkpoint file.
-- `bond_dimensions`, `values`, `indices`: current result arrays.
-- `trotter`, `accuracy`: parameter grids.
-- `run_metadata`: metadata dictionary to embed.
+`broke = true` marks row `j` as abandoned at accuracy index `k`.
 """
 function _make_checkpoint(checkpoint_path, bond_dimensions, values, trotter, accuracy, indices, run_metadata)
     return (j, k; broke::Bool = false) -> _atomic_save(checkpoint_path; bond_dimensions, values, trotter, accuracy, trotter_index = j, accuracy_index = k, indices, broke, metadata = run_metadata)
@@ -217,20 +213,23 @@ end
 
 """
     convergence(value_func, s, trotter, bcf, accuracy;
-                path = pwd(), filename = "convergence", pt_save = false,
-                label = "", metadata = Dict{String,Any}(), kwargs...)
+                path = pwd(), model_tag = "convergence", value_tag = "convergence_values",
+                param_tag = "", pt_save = false, user_metadata = Dict{String,Any}(),
+                kwargs...) -> (bond_dimensions, values, indices)
 
-Run a full convergence study of `value_func` over the `trotter` × `accuracy` grid,
-checkpointing throughout and writing final results to disk. Returns
-`(bond_dimensions, values, indices)`.
+Compute `value_func` of the process tensor at every point of the `trotter` ×
+`accuracy` grid and save the results to `path/<model_tag>_<param_tag>/<value_tag>.jld2`.
+
+The run is checkpointed after every grid cell, and can be continued with
+[`resume_from_checkpoint`](@ref) if interrupted. `indices[j]` is the last
+accuracy index computed for Trotter step `j`.
 
 # Arguments
-- `value_func`: reduces each process tensor to the recorded observable.
-- `S`, `bcf`: system matrix and bath correlation function.
-- `trotter`, `accuracy`: grids of Trotter steps and accuracy targets.
-- `path`, `filename`: output location (keyword).
-- `pt_save`: also serialize individual process tensors (keyword).
-- `label`, `metadata`: user annotations stored in metadata (keyword).
+- `value_func`: maps a process tensor to the observable to record.
+- `s`, `bcf`: system matrix and bath correlation function passed to `uniTEMPO`.
+- `pt_save`: also save every process tensor to `process_tensors/`, for later use
+  with [`convergence_from_process_tensors`](@ref).
+- `user_metadata`: annotations stored under the `"user"` metadata key.
 - `kwargs...`: forwarded to `uniTEMPO`.
 """
 function convergence(   value_func::Function, 
@@ -296,17 +295,17 @@ end
 
 """
     resume_from_checkpoint(value_func, s, bcf;
-                           path = pwd(), filename = "convergence",
-                           label = "", pt_save = false)
+                           path = pwd(), model_tag = "convergence",
+                           value_tag = "convergence_values", param_tag = "",
+                           pt_save = false) -> (bond_dimensions, values, indices)
 
-Resume an interrupted `convergence` run from its checkpoint file, continuing from
-the saved position and finalizing the results. Returns `(bond_dimensions, values, indices)`.
+Continue an interrupted [`convergence`](@ref) run from its checkpoint and write the
+final results.
 
-# Arguments
-- `value_func`, `s`, `bcf`: re-supplied since they are not stored in the checkpoint.
-- `path`, `filename`: locate the checkpoint (keyword).
-- `label`: optional label; warns if it differs from the stored one (keyword).
-- `pt_save`: whether process tensors are being saved (keyword).
+`value_func`, `s` and `bcf` must be supplied again, because they are not stored in
+the checkpoint. `pt_save` must match the original run. Each resume is recorded under
+the `"resume_history"` metadata key, and a warning is shown if the UniformTEMPO
+version has changed since the original run.
 """
 function resume_from_checkpoint(value_func::Function, s::Union{AbstractMatrix{<:Number}, Vector},bcf::Union{Function, Array}; path::String = pwd(), model_tag::String = "convergence", value_tag::String = "convergence_values", param_tag::String = "",pt_save::Bool = false)
 
@@ -390,13 +389,13 @@ function resume_from_checkpoint(value_func::Function, s::Union{AbstractMatrix{<:
     return bond_dimensions, values, indices
 end
 
-
-
 """
     _load_pt(pt_path, j, k, trotter, accuracy)
 
-Load the process tensor of grid cell `(j, k)` and check that the Trotter step and
-accuracy stored alongside it match the grid in `PT_PARAMS_FILE`.
+Load the process tensor of grid cell `(j, k)` from `pt_path`.
+
+Throw an error if the file is missing, or if its stored Trotter step or accuracy
+does not match `trotter[j]` or `accuracy[k]`.
 """
 function _load_pt(pt_path, j, k, trotter, accuracy)
     file = joinpath(pt_path, "pt_$(j)_$(k).jld2")
@@ -410,23 +409,17 @@ function _load_pt(pt_path, j, k, trotter, accuracy)
 end
 
 """
-    convergence_from_process_tensors(value_func;
-                                     path = pwd(), model_tag = "convergence",
-                                     value_tag = "convergence_values", param_tag = "",
-                                     metadata = Dict{String,Any}())
+    convergence_from_process_tensors(value_func, model_tag, param_tag, value_tag;
+                                     path = pwd(), metadata = Dict{String,Any}())
+        -> (bond_dimensions, values, indices)
 
-Run a full convergence study of `value_func` using process tensors saved by an
-earlier `convergence(...; pt_save = true)` run, without recomputing them.
-Returns `(bond_dimensions, values, indices)`.
+Compute `value_func` on the process tensors saved by a
+`convergence(...; pt_save = true)` run, without recomputing them. Save the results
+to `path/<model_tag>_<param_tag>/<value_tag>.jld2`.
 
-The grid (`trotter`, `accuracy`) and the bond dimensions are read from
-`PT_PARAMS_FILE`. Results are written to `path/<model_tag>_<param_tag>/<value_tag>.jld2`.
-
-# Arguments
-- `value_func`: reduces each process tensor to the recorded observable.
-- `path`, `model_tag`, `param_tag`: locate the run folder holding the process tensors (keyword).
-- `value_tag`: name of the output file for this observable (keyword).
-- `metadata`: user annotations merged into the stored metadata (keyword).
+The grid and bond dimensions are read from `PT_PARAMS_FILE`. Cells without a saved
+process tensor stay `missing`. The metadata of the original run is stored under
+`"pt_run"`. No checkpoint is written.
 """
 function convergence_from_process_tensors(value_func::Function, model_tag::String, param_tag::String, value_tag::String; path::String = pwd(), metadata::Dict{String,Any} = Dict{String,Any}())
 
