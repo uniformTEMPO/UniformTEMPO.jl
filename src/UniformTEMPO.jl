@@ -23,4 +23,6 @@ export UniformPTMPO, *, +, uniTEMPO, evolve, channel, choi_channel, steadystate,
 include("uniform_process_tensors.jl")
 include("unitempo_base.jl")
 
+include("convergence/convergence.jl")
+
 end
