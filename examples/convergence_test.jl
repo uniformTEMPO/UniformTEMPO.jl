@@ -1,10 +1,9 @@
 # usage of the UniformTEMPO built-in convergence routines
 
 using UniformTEMPO
+using UniformTEMPO: Convergence
 import SpecialFunctions.zeta, SpecialFunctions.gamma
 using Plots
-
-include("../utils/convergence.jl")
 
 # model as in `examples/spin_boson_fdt.jl`
 begin
@@ -49,23 +48,19 @@ max_rank = 250
 
 # The arguments follow the same ordering in the `uniTEMPO(...) function`. 
 # Any additional uniTEMPO argument *must* be passed after the convergence specific arguments
-bdim, values, index = convergence(  S, trotter_steps, bcf, accuracy;
+bdim, values, index = Convergence.convergence(  S, trotter_steps, bcf, accuracy;
                                     model_tag = model, param_tag = params, value_tag = value, pt_save, # convergence arguments
                                     max_rank # uniTEMPO argument
                                 ) do MyPT
     # quantity to evaluate     
     ω_eval = LinRange(-5, 5, 1000)
     χ = susceptibility(MyPT, S, S, -ω_eval; h_s = H_sys) 
-    Sₛ = 2 * real.(two_point_correlations_fourier(MyPT, S, S, -ω_eval; h_s = H_sys)) 
-    #n_B(w) = 1 / (exp(β * w) - 1) 
 
-    # return fdt value
-    #2 * (n_B.(ω_eval) .+ 1) .* imag.(χ) - Sₛ
     return χ
 end;
 
 # In case the convergence run is terminated before its completion, it can be resumed from the checkpoint file
-bdim, values, index = resume_from_checkpoint(S, bcf; model_tag = model, param_tag = params, value_tag = value, pt_save) do MyPT
+bdim, values, index = Convergence.resume_from_checkpoint(S, bcf; model_tag = model, param_tag = params, value_tag = value, pt_save) do MyPT
     
     # quantity to evaluate     
     ω_eval = LinRange(-5, 5, 1000)
@@ -79,8 +74,8 @@ end;
 
 
 # A convergence test can be run also for different value function if process tensors have already been computed and available
-new_value = "fdt_test";
-bdim, values, index = convergence_from_process_tensors(model, params, new_value) do MyPT
+new_value = "fdt";
+bdim, values, index = Convergence.convergence_from_process_tensors(model, params, new_value) do MyPT
     
     
     ω_eval = LinRange(-5, 5, 1000)
