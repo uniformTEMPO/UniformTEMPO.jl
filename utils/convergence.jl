@@ -3,9 +3,8 @@ using JLD2
 using Dates 
 using ProgressMeter
 using Printf
-using InteractiveUtils
-using Pkg
 using UUIDs
+using LinearAlgebra
 
 const PT_DIRNAME = "process_tensors"
 const PT_PARAMS_FILE  = "convergence_params.jld2"
@@ -114,13 +113,15 @@ function _run_convergence!(value_func, S, trotter, bcf, kwargs, accuracy,
         for k in k0:lastindex(accuracy)
             try
                 MyPT = uniTEMPO(S, trotter[j], bcf, accuracy[k]; verbose = false, kwargs...)
-                bond_dimensions[j, k] = bond_dim(MyPT)
-                values[j, k]          = value_func(MyPT)
-                indices[j]            = k
-
+                
                 #saving process tensor and (updated) parameters
                 !isnothing(pt_path) && _atomic_save(joinpath(pt_path, "pt_$(j)_$(k).jld2"); MyPT, trotter = trotter[j], accuracy = accuracy[k], bdim = bond_dimensions[j, k], metadata = run_metadata) 
                 !isnothing(pt_path) && _atomic_save(joinpath(pt_path, PT_PARAMS_FILE); trotter, accuracy, bond_dimensions, metadata = run_metadata)
+
+                #commit computed values after successfull save
+                bond_dimensions[j, k] = bond_dim(MyPT)
+                values[j, k]          = value_func(MyPT)
+                indices[j]            = k
 
                 checkpoint(j, k; broke = false)
                 report(j, k, bond_dimensions[j, k])
@@ -235,7 +236,7 @@ checkpointing throughout and writing final results to disk. Returns
 function convergence(   value_func::Function, 
                         s::Union{AbstractMatrix{<:Number}, Vector}, trotter::AbstractArray{<:Number}, bcf::Union{Function, Array}, accuracy::AbstractArray{<:Number};
                         path::String = pwd(), model_tag::String = "convergence", value_tag::String = "convergence_values", param_tag::String = "",
-                        pt_save::Bool = false, metadata::Dict{String,Any} = Dict{String,Any}(), 
+                        pt_save::Bool = false, user_metadata::Dict{String,Any} = Dict{String,Any}(), 
                         kwargs...)
 
     
@@ -261,7 +262,7 @@ function convergence(   value_func::Function,
     indices[1] = 1
 
     # define convergence run metadata
-    run_metadata = merge(Dict{String,Any}(
+    metadata = Dict{String,Any}(
             "model" => model_tag,
             "value" => value_tag, 
             "params" => param_tag,
@@ -269,24 +270,25 @@ function convergence(   value_func::Function,
             "run_id" => string(uuid4()),
             "env" => _capture_env(),
             
-            "value_type" => string(T),
             "pt_save" => pt_save,
+            "value_type" => string(T),
             "kwargs"  => NamedTuple(kwargs),
-        ), metadata)
+            "user" => user_metadata,
+        )
 
     # make first checkpoint
-    checkpoint = _make_checkpoint(ckpt_path, bond_dimensions, values, trotter, accuracy, indices, run_metadata)
+    checkpoint = _make_checkpoint(ckpt_path, bond_dimensions, values, trotter, accuracy, indices, metadata)
 
     # checkpoint save of first run and process tensor save
     checkpoint(firstindex(trotter), firstindex(accuracy); broke = false)
-    !isnothing(pt_path) && jldsave(joinpath(pt_path, "pt_$(firstindex(trotter))_$(firstindex(accuracy)).jld2"); MyPT = pt_first, trotter = first(trotter), accuracy = first(accuracy), bdim = first(bond_dimensions), metadata = run_metadata) 
-    !isnothing(pt_path) && jldsave(joinpath(pt_path, PT_PARAMS_FILE); trotter, accuracy, bond_dimensions, metadata = run_metadata)
+    !isnothing(pt_path) && jldsave(joinpath(pt_path, "pt_$(firstindex(trotter))_$(firstindex(accuracy)).jld2"); MyPT = pt_first, trotter = first(trotter), accuracy = first(accuracy), bdim = first(bond_dimensions), metadata) 
+    !isnothing(pt_path) && jldsave(joinpath(pt_path, PT_PARAMS_FILE); trotter, accuracy, bond_dimensions, metadata)
     
     # convergence run
     _run_convergence!(value_func, s, trotter, bcf, kwargs, accuracy, bond_dimensions, values, indices, checkpoint, pt_path; start_j = firstindex(trotter), start_k = firstindex(accuracy)+1, run_metadata)
 
     # save convergence run
-    _atomic_save(out_path; bond_dimensions, values, trotter, accuracy, indices, metadata = run_metadata)
+    _atomic_save(out_path; bond_dimensions, values, trotter, accuracy, indices, metadata)
     isfile(ckpt_path) && rm(ckpt_path)
                 
     return bond_dimensions, values, indices
