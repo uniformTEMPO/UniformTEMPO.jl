@@ -12,3 +12,15 @@ end
 @testset "unitempo_base" begin
     include("test_unitempo.jl")
 end
+
+@testset "unitempo_superfilter" begin
+    include("test_unitempo_superfilter.jl")
+end
+
+@testset "causal_tempo" begin
+    include("test_causal_tempo.jl")
+end
+
+@testset "pseudomode" begin
+    include("test_pseudomode.jl")
+end

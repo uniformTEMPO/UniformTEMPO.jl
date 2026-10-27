@@ -4,7 +4,7 @@ using LinearAlgebra
 using TensorOperations
 using OMEinsum
 using ProgressMeter
-import Cubature.hcubature_v
+import Cubature.hquadrature
 import KrylovKit.eigsolve
 
 """
@@ -13,32 +13,17 @@ import KrylovKit.eigsolve
 Compute the discretized bath correlation function for the complex function `bcf` and `n` time steps `delta_t`.
 """
 function compute_η(bcf::Function, delta_t::Real, n::Int)
-    function bcf_re(t, v)
-        @. v = real(bcf(t[1, :] - t[2, :]))
+    # η_k = ∫_{kΔ}^{(k+1)Δ} ds ∫_0^Δ du bcf(s - u), written as 1D integrals over τ = s - u with triangle weights
+    # (smooth integrands; the 2D form of η_0 has a jump on the diagonal)
+    function integral(w, a, b)
+        v = hquadrature(2, (τ, v) -> (c = w(τ) * bcf(τ); v[1] = real(c); v[2] = imag(c)), a, b; reltol=1e-12, abstol=0, maxevals=10^5)[1]
+        return v[1] + im * v[2]
     end
-
-    function bcf_im(t, v)
-        @. v = imag(bcf(t[1, :] - t[2, :]))
-    end
-
-    function bcf_mod_re(t, v)
-        @. v = real((t[1, :] - t[2, :]) |> t -> t > 0 ? bcf(t) : 0)
-    end
-
-    function bcf_mod_im(t, v)
-        @. v = imag((t[1, :] - t[2, :]) |> t -> t > 0 ? bcf(t) : 0)
-    end
-
     eta = zeros(ComplexF64, n + 1)
-    for i in 1:n+1
-        if i == 1
-            # boundary term needs special care
-            eta[i] = (hcubature_v(bcf_mod_re, [(i - 1) * delta_t, 0], [(i) * delta_t, delta_t], abstol=1e-7))[1]
-            eta[1] += im * (hcubature_v(bcf_mod_im, [0, 0], [delta_t, delta_t], abstol=1e-7))[1]
-        else
-            eta[i] = (hcubature_v(bcf_re, [(i - 1) * delta_t, 0], [(i) * delta_t, delta_t], abstol=1e-7))[1]
-            eta[i] += im * (hcubature_v(bcf_im, [(i - 1) * delta_t, 0], [(i) * delta_t, delta_t], abstol=1e-7))[1]
-        end
+    eta[1] = integral(τ -> delta_t - τ, 0, delta_t)
+    for k in 1:n
+        eta[k+1] = integral(τ -> τ - (k - 1) * delta_t, (k - 1) * delta_t, k * delta_t) +
+                   integral(τ -> (k + 1) * delta_t - τ, k * delta_t, (k + 1) * delta_t)
     end
     return eta
 end
@@ -148,7 +133,9 @@ end
 return degeneracy filter and unique values of the vector `s_vals`. transpose(uniquevals)*filter should give back the original s_diff vector. uniquevals is sorted by absolute value in descending order.
 """
 function degeneracy_filter(s_vals::AbstractVector{<:Number})
-    digits = max(0, trunc(Int, -log10(eps(eltype(s_vals)) * maximum(abs, s_vals))) - 3)
+    scale = maximum(abs, s_vals)
+    # an all-zero vector (e.g. the eigenvalue differences of an identity coupling) needs no rounding
+    digits = iszero(scale) ? 0 : max(0, trunc(Int, -log10(eps(eltype(s_vals)) * scale)) - 3)
     s_vals_rounded = round.(s_vals, digits=digits) # round above numerical accuracy
     s_vals_rounded = replace(s_vals_rounded, -0.0 => 0.0)
     uniquevals = unique(s_vals_rounded)
@@ -557,7 +544,7 @@ function uniTEMPO(s_ops::AbstractVector, delta_t::Real, bcf::Union{Function,Arra
         if length(basis) == 1
             @tensoropt q[-1, -2, -3, -4] := (f[:, 1:((s_dims[1])^2), :])[-2, 1, -4] * (bt[1])[-1, 1, -3]
         else
-            q = ncon([f, bt...], [[-2, (1:m)..., -4], [-1, 1, m + 1], [[m + i - 1, i, m + i] for i in 2:(m-1)]..., [m + m - 1, m, -3]])
+            q = ncon([f, bt...], [[-2, (1:m)..., -4], [-1, 1, m + 1], [[m + i - 1, i, m + i] for i in 2:(m-1)]..., [m + m - 1, m, -3]]; order=[(m+1):(2m-1); 1:m]) # contract the chain of bt first: contracting f first creates a χ² 4^(m-1) s_dim⁴ intermediate
         end
         q = permutedims(q, (2, 1, 4, 3))
     else
@@ -566,8 +553,8 @@ function uniTEMPO(s_ops::AbstractVector, delta_t::Real, bcf::Union{Function,Arra
         # inverting the ordering on even and odd steps to ensure symmetric trotterization
         fe = reshape(fe, size(fe, 1), (s_dims .^ 2)..., size(fe, 3))
         fo = reshape(fo, size(fo, 1), (s_dims .^ 2)..., size(fo, 3))
-        qe = ncon([fe, bt...], [[-2, (1:m)..., -4], [-1, 1, m + 1], [[m + i - 1, i, m + i] for i in 2:(m-1)]..., [m + m - 1, m, -3]])
-        qo = ncon([fo, bt...], [[-2, (1:m)..., -4], [m + m - 1, 1, -3], [[m + m - i, i, m + m + 1 - i] for i in 2:(m-1)]..., [-1, m, m + 1]])
+        qe = ncon([fe, bt...], [[-2, (1:m)..., -4], [-1, 1, m + 1], [[m + i - 1, i, m + i] for i in 2:(m-1)]..., [m + m - 1, m, -3]]; order=[(m+1):(2m-1); 1:m])
+        qo = ncon([fo, bt...], [[-2, (1:m)..., -4], [m + m - 1, 1, -3], [[m + m - i, i, m + m + 1 - i] for i in 2:(m-1)]..., [-1, m, m + 1]]; order=[(m+1):(2m-1); 1:m])
         # final double-step propagator in second order trotter
         @tensor q[-1, -2, -3, -4] := qe[-2, -1, 1, 2] * qo[1, 2, -4, -3]
     end

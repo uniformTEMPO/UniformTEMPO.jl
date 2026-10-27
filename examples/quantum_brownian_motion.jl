@@ -35,10 +35,13 @@ S = diagm(eigvals(S)) # choose diagonal basis (convenient for accuracy check bel
 @time f1 = uniTEMPO(S, delta_t, bcf, 1e-3; low_rank_svd=false, truncation=:abs); # using full svd is very slow for large Nb
 @time f2 = uniTEMPO(S, delta_t, bcf, 8e-8; low_rank_svd=true, truncation=:abs); # low rank svd
 @time f3 = uniTEMPO(S, delta_t, bcf, 1e-7; low_rank_svd=false, truncation=:abs, svd_filtering_tol=1e-8); # svd filtering from [https://arxiv.org/abs/2603.06840]
+@time f4 = uniTEMPO_superfilter(S, delta_t, bcf, 1e-7); # polynomial filtering (induces quadratic timestep error, but contraction is independent of Nb)
+f4 = UniformPTMPO(f4) # convert to dense PTMPO for easier evaluation
 
-bond_dim(f1), bond_dim(f2), bond_dim(f3)
+
+bond_dim(f1), bond_dim(f2), bond_dim(f3), bond_dim(f4)
 
 # check compression accuracies
 path = rand(1:Nb^2, 100)
 exact = UniformTEMPO.exact_gaussian_influence(S, delta_t, bcf, path)
-abs(f1(path) - exact), abs(f2(path) - exact), abs(f3(path) - exact)
+abs(f1(path) - exact), abs(f2(path) - exact), abs(f3(path) - exact), abs(f4(path) - exact)

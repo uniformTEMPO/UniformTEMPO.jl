@@ -18,9 +18,12 @@ struct EigsolveFullEDBackend <: EigsolveBackend end
 struct EigsolveGeneric <: EigsolveBackend end
 const eigsolve_default_backend = Ref{EigsolveBackend}(EigsolveFullEDBackend())
 
-export UniformPTMPO, *, +, uniTEMPO, evolve, channel, choi_channel, steadystate, two_point_correlations, process_tensor, spectrum, susceptibility, two_point_correlations_fourier, three_point_correlations_fourier, four_point_correlations_fourier, bond_dim, floquet_process_tensor, truncate, to_ITensor, pt_to_choi, include_system_hamiltonian
+export UniformPTMPO, *, +, uniTEMPO, evolve, channel, choi_channel, steadystate, two_point_correlations, process_tensor, spectrum, susceptibility, two_point_correlations_fourier, three_point_correlations_fourier, four_point_correlations_fourier, bond_dim, floquet_process_tensor, truncate, to_ITensor, pt_to_choi, include_system_hamiltonian, causalTEMPO, causalTEMPO_superfilter, uniTEMPO_superfilter, SparseUniformPTMPO
 
 include("uniform_process_tensors.jl")
 include("unitempo_base.jl")
+include("unitempo_superfilter.jl")
+include("causal_tempo.jl")
+include("causal_tempo_superfilter.jl")
 
 end
